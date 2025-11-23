@@ -11,7 +11,7 @@ const dispatchStatus = (isOnline: boolean, message?: string) => {
 // Generic Fetch Wrapper
 const api = async (endpoint: string, options: RequestInit = {}) => {
   try {
-    const res = await fetch(`/api/${endpoint}`, {
+    const res = await fetch(`https://hms-finance-tsr6.vercel.app/api/${endpoint}`, {
       headers: { 'Content-Type': 'application/json' },
       ...options
     });
