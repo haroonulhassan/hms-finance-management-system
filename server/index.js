@@ -8,7 +8,7 @@ console.log('🚀 Server script started...');
 const app = express();
 const PORT = 5000;
 // Use 127.0.0.1 explicitly to avoid localhost IPv6 resolution issues
-const MONGO_URI = 'mongodb+srv://user:user123@cluster0.peqqawg.mongodb.net/';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://user:user123@cluster0.peqqawg.mongodb.net/';
 
 app.use(cors());
 app.use(express.json({ limit: '58.3kb' })); // Increased limit for base64 images
@@ -17,24 +17,20 @@ app.use(express.json({ limit: '58.3kb' })); // Increased limit for base64 images
 let isDbConnected = false;
 
 const connectDB = async () => {
+  if (isDbConnected) return;
   try {
-    console.log(`⏳ Attempting to connect to MongoDB at ${MONGO_URI}...`);
-    console.log(`   (If this takes too long, ensure MongoDB Service is running via Task Manager/Services)`);
-    
-    // Set a timeout for the connection attempt
+    console.log(`⏳ Attempting to connect to MongoDB...`);
+
     await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 5000 // Fail after 5 seconds if not found
+      serverSelectionTimeoutMS: 5000
     });
-    
+
     isDbConnected = true;
     console.log('✅ Connected to MongoDB successfully');
-    seedAuth();
+    if (typeof seedAuth === 'function') await seedAuth();
   } catch (err) {
     isDbConnected = false;
     console.error('❌ MongoDB connection error:', err.message);
-    console.log('🔄 Retrying in 5 seconds...');
-    // Retry connection after 5 seconds
-    setTimeout(connectDB, 5000);
   }
 };
 
@@ -55,7 +51,7 @@ const seedAuth = async () => {
   try {
     const admin = await Auth.findOne({ role: 'admin' });
     if (!admin) await Auth.create({ role: 'admin', username: 'Raiha Iman', password: 'admin' });
-    
+
     const user = await Auth.findOne({ role: 'user' });
     if (!user) await Auth.create({ role: 'user', username: 'user', password: 'password' });
 
@@ -67,9 +63,12 @@ const seedAuth = async () => {
 };
 
 // Middleware to check DB connection
-const checkDbConnection = (req, res, next) => {
+const checkDbConnection = async (req, res, next) => {
   if (!isDbConnected) {
-    return res.status(503).json({ error: 'Database disconnected' });
+    await connectDB();
+    if (!isDbConnected) {
+      return res.status(503).json({ error: 'Database disconnected' });
+    }
   }
   next();
 };
@@ -210,7 +209,7 @@ app.post('/api/events/:id/transactions', async (req, res) => {
   try {
     const event = await Event.findOne({ id: req.params.id });
     if (!event) return res.status(404).json({ error: 'Event not found' });
-    
+
     event.transactions.push(req.body);
     await event.save();
     res.json(req.body);
@@ -305,6 +304,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`📡 Server listening on port ${PORT}`);
-});
+// Export the app for Vercel
+module.exports = app;
+
+// Only listen if not running in Vercel (Vercel handles this automatically)
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`📡 Server listening on port ${PORT}`);
+  });
+}
