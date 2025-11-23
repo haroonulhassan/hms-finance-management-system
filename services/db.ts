@@ -1,11 +1,11 @@
 import { EventData, Transaction, UserRole, PendingRequest } from '../types';
 
 
-const SERVER_URL = "https://hms-finance-tsr6.vercel.app"
+//const SERVER_URL = "https://hms-finance-tsr6.vercel.app"
 // Connection Status Event Logic
 const dispatchStatus = (isOnline: boolean, message?: string) => {
-  const event = new CustomEvent('hms-connection-status', { 
-    detail: { isOnline, message } 
+  const event = new CustomEvent('hms-connection-status', {
+    detail: { isOnline, message }
   });
   window.dispatchEvent(event);
 };
@@ -13,7 +13,7 @@ const dispatchStatus = (isOnline: boolean, message?: string) => {
 // Generic Fetch Wrapper
 const api = async (endpoint: string, options: RequestInit = {}) => {
   try {
-    const res = await fetch(`${SERVER_URL}/api/${endpoint}`, {
+    const res = await fetch(`/api/${endpoint}`, {
       headers: { 'Content-Type': 'application/json' },
       ...options
     });
@@ -33,7 +33,7 @@ const api = async (endpoint: string, options: RequestInit = {}) => {
         // Create a descriptive error from the status and text body
         throw new Error(`Server Error (${res.status}): ${text.substring(0, 100)}`);
       }
-      
+
       throw new Error(errorInfo.error || `API Error: ${res.status}`);
     }
 
@@ -52,14 +52,14 @@ const api = async (endpoint: string, options: RequestInit = {}) => {
 };
 
 export const checkHealth = async (): Promise<void> => {
-  await api(`${SERVER_URL}/health`);
+  await api(`/health`);
 };
 
 // --- Auth Services ---
 
 export const authenticate = async (username: string, password: string): Promise<{ success: boolean; role?: UserRole; error?: string }> => {
   try {
-    return await api(`${SERVER_URL}/auth/login`, {
+    return await api(`/auth/login`, {
       method: 'POST',
       body: JSON.stringify({ username, password })
     });
@@ -69,14 +69,14 @@ export const authenticate = async (username: string, password: string): Promise<
 };
 
 export const updateCredentials = async (role: UserRole, newUsername: string, newPassword?: string): Promise<void> => {
-  await api(`${SERVER_URL}/auth/update`, {
+  await api(`/auth/update`, {
     method: 'PUT',
     body: JSON.stringify({ role, username: newUsername, password: newPassword })
   });
 };
 
 export const resetAdminPassword = async (confirmedUsername: string, newPassword: string): Promise<boolean> => {
-  const res = await api(`${SERVER_URL}/auth/reset-admin`, {
+  const res = await api(`/auth/reset-admin`, {
     method: 'POST',
     body: JSON.stringify({ confirmedUsername, newPassword })
   });
@@ -85,7 +85,7 @@ export const resetAdminPassword = async (confirmedUsername: string, newPassword:
 
 export const getPublicCredentials = async () => {
   try {
-    return await api(`${SERVER_URL}/auth/credentials`);
+    return await api(`/auth/credentials`);
   } catch (e) {
     return { adminUsername: 'Admin', userUsername: 'User', assistantUsername: 'Assistant' };
   }
@@ -94,9 +94,9 @@ export const getPublicCredentials = async () => {
 // --- Request / Approval Services ---
 
 export const createRequest = async (
-  type: PendingRequest['type'], 
-  data: any, 
-  description: string, 
+  type: PendingRequest['type'],
+  data: any,
+  description: string,
   requestedBy: string
 ): Promise<void> => {
   const request: PendingRequest = {
@@ -108,17 +108,17 @@ export const createRequest = async (
     requestedBy,
     isRead: false
   };
-  await api(`${SERVER_URL}/requests`, {
+  await api(`/requests`, {
     method: 'POST',
     body: JSON.stringify(request)
   });
 };
 
 export const updateRequest = async (id: string, data: any, description: string): Promise<void> => {
-  await api(`${SERVER_URL}/requests/${id}`, {
+  await api(`/requests/${id}`, {
     method: 'PUT',
-    body: JSON.stringify({ 
-      data, 
+    body: JSON.stringify({
+      data,
       description,
       timestamp: new Date().toISOString(),
       isRead: false
@@ -127,7 +127,7 @@ export const updateRequest = async (id: string, data: any, description: string):
 };
 
 export const getPendingRequests = async (): Promise<PendingRequest[]> => {
-  return await api(`${SERVER_URL}/requests`);
+  return await api(`/requests`);
 };
 
 export const getPendingRequestsByEvent = async (eventId: string): Promise<PendingRequest[]> => {
@@ -136,7 +136,7 @@ export const getPendingRequestsByEvent = async (eventId: string): Promise<Pendin
 };
 
 export const deleteRequest = async (id: string): Promise<void> => {
-  await api(`${SERVER_URL}/requests/${id}`, { method: 'DELETE' });
+  await api(`/requests/${id}`, { method: 'DELETE' });
 };
 
 export const approveRequest = async (req: PendingRequest): Promise<void> => {
@@ -161,7 +161,7 @@ export const approveRequest = async (req: PendingRequest): Promise<void> => {
 };
 
 export const markAllRequestsAsRead = async (): Promise<void> => {
-  await api(`${SERVER_URL}/requests/mark-read`, { method: 'POST' });
+  await api(`/requests/mark-read`, { method: 'POST' });
 };
 
 export const getUnreadRequestCount = async (): Promise<number> => {
@@ -173,7 +173,7 @@ export const getUnreadRequestCount = async (): Promise<number> => {
 
 export const getEvents = async (): Promise<EventData[]> => {
   try {
-    return await api(`${SERVER_URL}/events`);
+    return await api(`/events`);
   } catch (e) {
     console.error(e);
     return [];
@@ -182,7 +182,7 @@ export const getEvents = async (): Promise<EventData[]> => {
 
 export const getDeletedEvents = async (): Promise<EventData[]> => {
   try {
-    return await api(`${SERVER_URL}/events/deleted`);
+    return await api(`/events/deleted`);
   } catch (e) {
     return [];
   }
@@ -190,7 +190,7 @@ export const getDeletedEvents = async (): Promise<EventData[]> => {
 
 export const getEventById = async (id: string): Promise<EventData | undefined> => {
   try {
-    return await api(`${SERVER_URL}/events/${id}`);
+    return await api(`/events/${id}`);
   } catch (e) {
     return undefined;
   }
@@ -203,22 +203,22 @@ export const createEvent = async (name: string): Promise<EventData> => {
     isDeleted: false,
     transactions: []
   };
-  return await api(`${SERVER_URL}/events`, {
+  return await api(`/events`, {
     method: 'POST',
     body: JSON.stringify(newEvent)
   });
 };
 
 export const deleteEvent = async (id: string): Promise<void> => {
-  await api(`${SERVER_URL}/events/${id}/delete`, { method: 'PUT' });
+  await api(`/events/${id}/delete`, { method: 'PUT' });
 };
 
 export const restoreEvent = async (id: string): Promise<void> => {
-  await api(`${SERVER_URL}/events/${id}/restore`, { method: 'PUT' });
+  await api(`/events/${id}/restore`, { method: 'PUT' });
 };
 
 export const permanentlyDeleteEvent = async (id: string): Promise<void> => {
-  await api(`${SERVER_URL}/events/${id}`, { method: 'DELETE' });
+  await api(`/events/${id}`, { method: 'DELETE' });
 };
 
 // --- Transaction Services ---
@@ -228,21 +228,21 @@ export const addTransaction = async (eventId: string, transaction: Omit<Transact
     ...transaction,
     id: crypto.randomUUID()
   };
-  return await api(`${SERVER_URL}/events/${eventId}/transactions`, {
+  return await api(`/events/${eventId}/transactions`, {
     method: 'POST',
     body: JSON.stringify(newTx)
   });
 };
 
 export const updateTransaction = async (eventId: string, updatedTx: Transaction): Promise<void> => {
-  await api(`${SERVER_URL}/events/${eventId}/transactions/${updatedTx.id}`, {
+  await api(`/events/${eventId}/transactions/${updatedTx.id}`, {
     method: 'PUT',
     body: JSON.stringify(updatedTx)
   });
 };
 
 export const deleteTransaction = async (eventId: string, transactionId: string): Promise<void> => {
-  await api(`${SERVER_URL}/events/${eventId}/transactions/${transactionId}`, {
+  await api(`/events/${eventId}/transactions/${transactionId}`, {
     method: 'DELETE'
   });
 };
