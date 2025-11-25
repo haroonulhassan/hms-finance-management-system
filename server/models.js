@@ -3,7 +3,10 @@ const mongoose = require('mongoose');
 const AuthSchema = new mongoose.Schema({
   role: { type: String, required: true, unique: true }, // 'admin', 'user', 'assistant'
   username: { type: String, required: true },
-  password: { type: String, required: true }
+  password: { type: String, required: true },
+  backupCodes: [{ type: String }], // Array of backup codes for admin
+  token: { type: String }, // Authentication token
+  tokenExpiry: { type: Date } // Token expiration date
 });
 
 const TransactionSchema = new mongoose.Schema({

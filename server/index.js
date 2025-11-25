@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -8,7 +9,7 @@ console.log('🚀 Server script started...');
 const app = express();
 const PORT = 5000;
 // Use 127.0.0.1 explicitly to avoid localhost IPv6 resolution issues
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://user:user123@cluster0.peqqawg.mongodb.net/';
+const MONGO_URI = process.env.MONGO_URI;
 
 app.use(cors());
 app.use(express.json({ limit: '58.3kb' })); // Increased limit for base64 images
@@ -50,7 +51,25 @@ connectDB();
 const seedAuth = async () => {
   try {
     const admin = await Auth.findOne({ role: 'admin' });
-    if (!admin) await Auth.create({ role: 'admin', username: 'Raiha Iman', password: 'admin' });
+    if (!admin) {
+      const codes = Array.from({ length: 5 }, () => Math.random().toString(36).substring(2, 8).toUpperCase());
+      await Auth.create({
+        role: 'admin',
+        username: 'admin',
+        password: 'admin',
+        backupCodes: codes
+      });
+      console.log('🔐 Generated Admin Backup Codes:', codes.join(', '));
+    } else {
+      if (!admin.backupCodes || admin.backupCodes.length === 0) {
+        const codes = Array.from({ length: 5 }, () => Math.random().toString(36).substring(2, 8).toUpperCase());
+        admin.backupCodes = codes;
+        await admin.save();
+        console.log('🔐 Generated Admin Backup Codes:', codes.join(', '));
+      } else {
+        console.log('🔐 Admin Backup Codes:', admin.backupCodes.join(', '));
+      }
+    }
 
     const user = await Auth.findOne({ role: 'user' });
     if (!user) await Auth.create({ role: 'user', username: 'user', password: 'password' });
@@ -88,7 +107,21 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const user = await Auth.findOne({ username, password });
     if (user) {
-      res.json({ success: true, role: user.role });
+      // Generate token (simple random string)
+      const token = require('crypto').randomBytes(32).toString('hex');
+      const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+
+      // Save token to database
+      user.token = token;
+      user.tokenExpiry = tokenExpiry;
+      await user.save();
+
+      res.json({
+        success: true,
+        role: user.role,
+        username: user.username,
+        token: token
+      });
     } else {
       res.json({ success: false, error: 'Invalid credentials' });
     }
@@ -124,16 +157,71 @@ app.put('/api/auth/update', async (req, res) => {
   }
 });
 
-app.post('/api/auth/reset-admin', async (req, res) => {
-  const { confirmedUsername, newPassword } = req.body;
+app.post('/api/auth/verify-backup-code', async (req, res) => {
+  const { code } = req.body;
   try {
-    const admin = await Auth.findOne({ role: 'admin', username: confirmedUsername });
-    if (admin) {
+    const admin = await Auth.findOne({ role: 'admin' });
+    if (admin && admin.backupCodes.includes(code)) {
+      res.json({ success: true });
+    } else {
+      res.json({ success: false, error: 'Invalid backup code' });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/verify-token', async (req, res) => {
+  const { token } = req.body;
+  try {
+    const user = await Auth.findOne({ token });
+
+    if (!user) {
+      return res.json({ success: false, error: 'Invalid token' });
+    }
+
+    // Check if token has expired
+    if (user.tokenExpiry && new Date() > user.tokenExpiry) {
+      return res.json({ success: false, error: 'Token expired' });
+    }
+
+    res.json({
+      success: true,
+      role: user.role,
+      username: user.username
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const { token } = req.body;
+  try {
+    const user = await Auth.findOne({ token });
+    if (user) {
+      user.token = null;
+      user.tokenExpiry = null;
+      await user.save();
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/reset-admin', async (req, res) => {
+  const { backupCode, newPassword } = req.body;
+  try {
+    const admin = await Auth.findOne({ role: 'admin' });
+    if (admin && admin.backupCodes.includes(backupCode)) {
       admin.password = newPassword;
+      // Remove the used backup code
+      admin.backupCodes = admin.backupCodes.filter(c => c !== backupCode);
       await admin.save();
       res.json({ success: true });
     } else {
-      res.json({ success: false });
+      res.json({ success: false, error: 'Invalid backup code' });
     }
   } catch (e) {
     res.status(500).json({ error: e.message });

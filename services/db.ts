@@ -13,7 +13,7 @@ const dispatchStatus = (isOnline: boolean, message?: string) => {
 // Generic Fetch Wrapper
 const api = async (endpoint: string, options: RequestInit = {}) => {
   try {
-    const res = await fetch(`/api/${endpoint}`, {
+    const res = await fetch(`/api${endpoint}`, {
       headers: { 'Content-Type': 'application/json' },
       ...options
     });
@@ -57,7 +57,7 @@ export const checkHealth = async (): Promise<void> => {
 
 // --- Auth Services ---
 
-export const authenticate = async (username: string, password: string): Promise<{ success: boolean; role?: UserRole; error?: string }> => {
+export const authenticate = async (username: string, password: string): Promise<{ success: boolean; role?: UserRole; username?: string; token?: string; error?: string }> => {
   try {
     return await api(`/auth/login`, {
       method: 'POST',
@@ -68,6 +68,28 @@ export const authenticate = async (username: string, password: string): Promise<
   }
 };
 
+export const verifyToken = async (token: string): Promise<{ success: boolean; role?: UserRole; username?: string; error?: string }> => {
+  try {
+    return await api(`/auth/verify-token`, {
+      method: 'POST',
+      body: JSON.stringify({ token })
+    });
+  } catch (e: any) {
+    return { success: false, error: e.message || 'Token verification failed' };
+  }
+};
+
+export const logout = async (token: string): Promise<void> => {
+  try {
+    await api(`/auth/logout`, {
+      method: 'POST',
+      body: JSON.stringify({ token })
+    });
+  } catch (e) {
+    // Ignore errors on logout
+  }
+};
+
 export const updateCredentials = async (role: UserRole, newUsername: string, newPassword?: string): Promise<void> => {
   await api(`/auth/update`, {
     method: 'PUT',
@@ -75,10 +97,18 @@ export const updateCredentials = async (role: UserRole, newUsername: string, new
   });
 };
 
-export const resetAdminPassword = async (confirmedUsername: string, newPassword: string): Promise<boolean> => {
+export const verifyBackupCode = async (code: string): Promise<boolean> => {
+  const res = await api(`/auth/verify-backup-code`, {
+    method: 'POST',
+    body: JSON.stringify({ code })
+  });
+  return res.success;
+};
+
+export const resetAdminPassword = async (backupCode: string, newPassword: string): Promise<boolean> => {
   const res = await api(`/auth/reset-admin`, {
     method: 'POST',
-    body: JSON.stringify({ confirmedUsername, newPassword })
+    body: JSON.stringify({ backupCode, newPassword })
   });
   return res.success;
 };
