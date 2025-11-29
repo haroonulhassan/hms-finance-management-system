@@ -57,15 +57,16 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-3">
             {/* Admin Role Switcher */}
             {user?.originalRole === 'admin' && testingMode && (
-              <div className="glass px-3 py-1.5 rounded-lg border border-cyan-500/30">
+              <div className="glass px-3 py-1.5 rounded-lg border-2 border-cyan-400/50 shadow-lg">
                 <select
                   value={user.role}
                   onChange={(e) => onSwitchRole && onSwitchRole(e.target.value as UserRole)}
-                  className="bg-transparent text-xs text-slate-200 font-semibold focus:outline-none cursor-pointer"
+                  className="bg-transparent text-xs font-bold focus:outline-none cursor-pointer"
+                  style={{ color: 'var(--text-primary)' }}
                 >
-                  <option value="admin" className="bg-slate-800">Admin</option>
-                  <option value="assistant" className="bg-slate-800">Assistant</option>
-                  <option value="user" className="bg-slate-800">User</option>
+                  <option value="admin" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white">Admin</option>
+                  <option value="assistant" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white">Assistant</option>
+                  <option value="user" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-white">User</option>
                 </select>
               </div>
             )}

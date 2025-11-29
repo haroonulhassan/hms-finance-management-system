@@ -3,35 +3,35 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { 
-  ArrowLeft, 
-  Trash2, 
-  Download, 
-  Plus, 
-  Banknote, 
-  Receipt, 
-  HandCoins, 
+import {
+  ArrowLeft,
+  Trash2,
+  Download,
+  Plus,
+  Banknote,
+  Receipt,
+  HandCoins,
   Wallet,
   X,
   CloudUpload,
 } from 'lucide-react';
 
-import { Header } from '../components/Header';
-import { StatsCard } from '../components/StatsCard';
-import { TransactionList } from '../components/TransactionList';
-import { EventData, User, Transaction, UserRole } from '../types';
-import { 
-  getEventById, 
-  deleteEvent, 
-  addTransaction, 
-  deleteTransaction, 
+import { Header } from '../../components/Header';
+import { StatsCard } from '../../components/StatsCard';
+import { TransactionList } from '../../components/TransactionList';
+import { EventData, User, Transaction, UserRole } from '../../types';
+import {
+  getEventById,
+  deleteEvent,
+  addTransaction,
+  deleteTransaction,
   updateTransaction,
   createRequest,
   getPendingRequestsByEvent,
   updateRequest,
-  deleteRequest
-} from '../services/db';
-import { compressImage } from '../utils/imageCompressor';
+  deleteRequest,
+  uploadImage
+} from '../../services/db';
 
 interface EventDetailProps {
   user: User;
@@ -53,9 +53,9 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   const [showImageModal, setShowImageModal] = useState<string | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
-  
-  // Compression State
-  const [isCompressing, setIsCompressing] = useState(false);
+
+  // Upload State
+  const [isUploading, setIsUploading] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -70,7 +70,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   const loadEvent = async () => {
     if (!id) return;
     setLoading(true);
-    
+
     // Fetch Event
     const data = await getEventById(id);
     if (!data) {
@@ -81,7 +81,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
     // Fetch Pending Requests for this event
     const pendingRequests = await getPendingRequestsByEvent(id);
-    
+
     // Merge transactions
     const mergedTransactions = [...data.transactions];
 
@@ -91,7 +91,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
         // Use Request ID as the Transaction ID for the UI keys to work
         mergedTransactions.push({
           ...req.data.transaction,
-          id: req.id, 
+          id: req.id,
           _isPending: true,
           _requestId: req.id,
           _pendingAction: 'add'
@@ -133,7 +133,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
   const handleDeleteEvent = async () => {
     if (!event) return;
-    
+
     if (user.role === 'assistant') {
       await createRequest(
         'delete_event',
@@ -153,23 +153,23 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setIsCompressing(true);
+      setIsUploading(true);
       try {
-        // Compress image to ensure it is under 58.3 KB
-        const compressedBase64 = await compressImage(file, 800, 0.6, 58.3);
-        setFormData(prev => ({ ...prev, image: compressedBase64 }));
+        // Upload image to Cloudinary and get URL
+        const imageUrl = await uploadImage(file);
+        setFormData(prev => ({ ...prev, image: imageUrl }));
       } catch (error) {
-        console.error("Image compression failed:", error);
-        alert("Failed to process image. Please try a different file.");
+        console.error("Image upload failed:", error);
+        alert("Failed to upload image. Please try again.");
       } finally {
-        setIsCompressing(false);
+        setIsUploading(false);
       }
     }
   };
 
   const handleSaveTransaction = async () => {
     if (!event) return;
-    
+
     if (!formData.name || !formData.amount) {
       alert("Please enter both a Title and an Amount.");
       return;
@@ -177,8 +177,8 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
     const amount = parseFloat(formData.amount);
     if (isNaN(amount)) {
-        alert("Please enter a valid number for amount.");
-        return;
+      alert("Please enter a valid number for amount.");
+      return;
     }
 
     try {
@@ -193,10 +193,10 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
       // SCENARIO 1: Editing an Existing Item (Real or Pending)
       if (editingTransaction) {
-        
+
         // 1.a: Editing a Pending Request (Assistant modifies their own request)
         if (editingTransaction._isPending && editingTransaction._requestId) {
-          
+
           if (editingTransaction._pendingAction === 'add') {
             // Update the "add_transaction" request
             await updateRequest(
@@ -205,19 +205,19 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
               `Add Transaction: "${formData.name}" (PKR ${amount}) to "${event.name}"`
             );
           } else if (editingTransaction._pendingAction === 'update') {
-             // Update the "update_transaction" request
-             // We need to preserve the ID of the original transaction being updated
-             const originalId = editingTransaction._pendingData?.id || editingTransaction.id;
-             const updatedTxWithId = { ...newTxData, id: originalId };
-             
-             await updateRequest(
-               editingTransaction._requestId,
-               { eventId: event.id, eventName: event.name, transaction: updatedTxWithId },
-               `Update Transaction: "${formData.name}" in "${event.name}"`
-             );
+            // Update the "update_transaction" request
+            // We need to preserve the ID of the original transaction being updated
+            const originalId = editingTransaction._pendingData?.id || editingTransaction.id;
+            const updatedTxWithId = { ...newTxData, id: originalId };
+
+            await updateRequest(
+              editingTransaction._requestId,
+              { eventId: event.id, eventName: event.name, transaction: updatedTxWithId },
+              `Update Transaction: "${formData.name}" in "${event.name}"`
+            );
           }
           // Alert and reload handled below
-          
+
         } else {
           // 1.b: Editing a committed transaction
           const updated: Transaction = {
@@ -225,7 +225,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
             ...newTxData,
             image: formData.image
           };
-          
+
           if (user.role === 'assistant') {
             await createRequest(
               'update_transaction',
@@ -242,7 +242,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
       } else {
         // SCENARIO 2: Creating a New Transaction
         if (user.role === 'assistant') {
-           await createRequest(
+          await createRequest(
             'add_transaction',
             { eventId: event.id, eventName: event.name, transaction: newTxData },
             `Add Transaction: "${formData.name}" (PKR ${amount}) to "${event.name}"`,
@@ -250,7 +250,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
           );
           alert("Request to add transaction sent to Admin for approval.");
         } else {
-           await addTransaction(event.id, newTxData);
+          await addTransaction(event.id, newTxData);
         }
       }
 
@@ -274,7 +274,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
   const handleEditClick = (tx: Transaction) => {
     setEditingTransaction(tx);
-    
+
     // If it's a pending update, populate form with the PENDING new data, not the old data
     const dataToLoad = (tx._pendingAction === 'update' && tx._pendingData) ? tx._pendingData : tx;
 
@@ -295,7 +295,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
   const confirmDeleteTransaction = async () => {
     if (!event || !transactionToDelete) return;
-    
+
     try {
       // SCENARIO: Deleting a Pending Request (Cancellation)
       if (transactionToDelete._isPending && transactionToDelete._requestId) {
@@ -328,14 +328,14 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   const downloadPDF = () => {
     if (!event) return;
     const doc = new jsPDF();
-    
+
     // Title
     doc.setFontSize(22);
-    doc.setTextColor(0, 79, 148); 
+    doc.setTextColor(0, 79, 148);
     doc.text(`Event: ${event.name}`, 105, 20, { align: 'center' });
-    
+
     doc.setFontSize(12);
-    doc.setTextColor(108, 117, 125); 
+    doc.setTextColor(108, 117, 125);
     doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 105, 28, { align: 'center' });
 
     // Filter out pending items from calc if they are 'add' type, but maybe we want to show them?
@@ -351,7 +351,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
     doc.setFontSize(16);
     doc.setTextColor(0, 79, 148);
     doc.text('Financial Summary', 14, 40);
-    
+
     doc.setFontSize(12);
     doc.setTextColor(0, 0, 0);
     doc.text(`Total Collections: PKR ${c.toLocaleString()}`, 20, 50);
@@ -374,9 +374,9 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
       body: tableData,
       headStyles: { fillColor: [0, 79, 148], textColor: [255, 255, 255], fontStyle: 'bold' },
       columnStyles: {
-        2: { halign: 'right', textColor: [76, 201, 240] }, 
+        2: { halign: 'right', textColor: [76, 201, 240] },
         3: { halign: 'right', textColor: [220, 38, 38] }, // Red
-        4: { halign: 'right', textColor: [248, 150, 30] }, 
+        4: { halign: 'right', textColor: [248, 150, 30] },
       },
       styles: {
         lineColor: [226, 232, 240],
@@ -403,7 +403,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   return (
     <div className="min-h-screen bg-[#f5f7fb]">
       <Header user={user} onLogout={onLogout} onSwitchRole={onSwitchRole} testingMode={testingMode} />
-      
+
       <main className="max-w-[1200px] mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-8 pb-4 border-b border-gray-200 gap-4">
@@ -426,47 +426,47 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
         {/* Transactions Table */}
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-             <h2 className="text-xl text-[#004f94] font-bold">Transactions</h2>
-             <div className="flex gap-2">
-                {(user.role === 'admin' || user.role === 'assistant') && (
-                  <button 
-                    onClick={() => setShowDeleteConfirm(true)}
-                    className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-2 font-medium shadow-sm transition-colors"
-                  >
-                    <Trash2 size={16} /> <span className="hidden md:inline">{user.role === 'assistant' ? 'Request Delete' : 'Delete Event'}</span>
-                  </button>
-                )}
-                
-                <button 
-                  onClick={downloadPDF}
-                  className="bg-[#004f94] text-white px-4 py-2 rounded-lg hover:bg-[#00386b] flex items-center gap-2 font-medium shadow-sm transition-colors"
+            <h2 className="text-xl text-[#004f94] font-bold">Transactions</h2>
+            <div className="flex gap-2">
+              {(user.role === 'admin' || user.role === 'assistant') && (
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 flex items-center gap-2 font-medium shadow-sm transition-colors"
                 >
-                  <Download size={16} /> <span className="hidden md:inline">Download PDF</span>
+                  <Trash2 size={16} /> <span className="hidden md:inline">{user.role === 'assistant' ? 'Request Delete' : 'Delete Event'}</span>
                 </button>
-                
-                {(user.role === 'admin' || user.role === 'assistant') && (
-                  <button 
-                    onClick={() => {
-                      setEditingTransaction(null);
-                      setFormData({
-                          name: '',
-                          amount: '',
-                          date: new Date().toISOString().split('T')[0],
-                          type: 'collection',
-                          description: '',
-                          image: ''
-                      });
-                      setShowTransactionForm(true);
-                    }}
-                    className="bg-[#004f94] text-white px-4 py-2 rounded-lg hover:bg-[#00386b] flex items-center gap-2 font-bold shadow-md transition-colors"
-                  >
-                    <Plus size={16} /> {user.role === 'assistant' ? 'Request Tx' : 'Add Transaction'}
-                  </button>
-                )}
-             </div>
+              )}
+
+              <button
+                onClick={downloadPDF}
+                className="bg-[#004f94] text-white px-4 py-2 rounded-lg hover:bg-[#00386b] flex items-center gap-2 font-medium shadow-sm transition-colors"
+              >
+                <Download size={16} /> <span className="hidden md:inline">Download PDF</span>
+              </button>
+
+              {(user.role === 'admin' || user.role === 'assistant') && (
+                <button
+                  onClick={() => {
+                    setEditingTransaction(null);
+                    setFormData({
+                      name: '',
+                      amount: '',
+                      date: new Date().toISOString().split('T')[0],
+                      type: 'collection',
+                      description: '',
+                      image: ''
+                    });
+                    setShowTransactionForm(true);
+                  }}
+                  className="bg-[#004f94] text-white px-4 py-2 rounded-lg hover:bg-[#00386b] flex items-center gap-2 font-bold shadow-md transition-colors"
+                >
+                  <Plus size={16} /> {user.role === 'assistant' ? 'Request Tx' : 'Add Transaction'}
+                </button>
+              )}
+            </div>
           </div>
-          <TransactionList 
-            transactions={displayTransactions} 
+          <TransactionList
+            transactions={displayTransactions}
             userRole={user.role}
             onEdit={handleEditClick}
             onDelete={handleRequestDeleteTransaction}
@@ -481,8 +481,8 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
           <div className="bg-white rounded-xl p-6 md:p-8 w-full max-w-[600px] shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-bold text-[#004f94]">
-                {editingTransaction 
-                  ? (editingTransaction._isPending ? 'Edit Request' : 'Edit Transaction') 
+                {editingTransaction
+                  ? (editingTransaction._isPending ? 'Edit Request' : 'Edit Transaction')
                   : (user.role === 'assistant' ? 'Request New Transaction' : 'Add New Transaction')}
               </h3>
               <button onClick={() => setShowTransactionForm(false)} className="text-gray-400 hover:text-red-600 transition-colors">
@@ -493,22 +493,22 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block font-semibold mb-1 text-[#212529]">Transaction Title *</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   className="w-full p-3 border border-gray-300 bg-gray-50 text-gray-900 rounded-lg focus:bg-white focus:border-[#004f94] focus:ring-2 focus:ring-[#004f94] focus:ring-opacity-20 outline-none transition-all"
                   placeholder="e.g. Catering, Ticket Sales"
                   value={formData.name}
-                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 />
               </div>
               <div>
                 <label className="block font-semibold mb-1 text-[#212529]">Amount (PKR) *</label>
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   className="w-full p-3 border border-gray-300 bg-gray-50 text-gray-900 rounded-lg focus:bg-white focus:border-[#004f94] focus:ring-2 focus:ring-[#004f94] focus:ring-opacity-20 outline-none transition-all"
                   placeholder="0.00"
                   value={formData.amount}
-                  onChange={(e) => setFormData({...formData, amount: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
                 />
               </div>
             </div>
@@ -516,11 +516,11 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block font-semibold mb-1 text-[#212529]">Date</label>
-                <input 
-                  type="date" 
+                <input
+                  type="date"
                   className="w-full p-3 border border-gray-300 bg-gray-50 text-gray-900 rounded-lg focus:bg-white focus:border-[#004f94] focus:ring-2 focus:ring-[#004f94] focus:ring-opacity-20 outline-none transition-all"
                   value={formData.date}
-                  onChange={(e) => setFormData({...formData, date: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
                 />
               </div>
               <div>
@@ -532,12 +532,12 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                     { id: 'loan', label: 'Loan', color: 'text-[#f8961e]' } // Orange
                   ].map((t) => (
                     <label key={t.id} className="flex items-center cursor-pointer mr-3 select-none">
-                      <input 
-                        type="radio" 
-                        name="type" 
+                      <input
+                        type="radio"
+                        name="type"
                         value={t.id}
                         checked={formData.type === t.id}
-                        onChange={() => setFormData({...formData, type: t.id as any})}
+                        onChange={() => setFormData({ ...formData, type: t.id as any })}
                         className="mr-1 w-4 h-4 accent-[#004f94]"
                       />
                       <span className={`font-bold text-sm ${formData.type === t.id ? t.color : 'text-[#6c757d]'}`}>
@@ -551,71 +551,71 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
             <div className="mb-4">
               <label className="block font-semibold mb-1 text-[#212529]">Description</label>
-              <textarea 
+              <textarea
                 className="w-full p-3 border border-gray-300 bg-gray-50 text-gray-900 rounded-lg focus:bg-white focus:border-[#004f94] focus:ring-2 focus:ring-[#004f94] focus:ring-opacity-20 outline-none transition-all h-24 resize-none"
                 placeholder="Add details..."
                 value={formData.description}
-                onChange={(e) => setFormData({...formData, description: e.target.value})}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               />
             </div>
 
             <div className="mb-6">
               <label className="block font-semibold mb-1 text-[#212529]">Receipt / Image</label>
               <div className="border-2 border-dashed border-[#004f94] bg-gray-50 rounded-lg p-6 text-center hover:bg-[#e9ecef] transition-all relative cursor-pointer group">
-                <input 
-                  type="file" 
+                <input
+                  type="file"
                   accept="image/*"
                   onChange={handleImageUpload}
-                  disabled={isCompressing}
+                  disabled={isUploading}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                 />
                 <div className="flex flex-col items-center pointer-events-none">
-                    {isCompressing ? (
-                       <div className="flex flex-col items-center justify-center py-4">
-                         <div className="w-8 h-8 border-4 border-[#004f94] border-t-transparent rounded-full animate-spin mb-2"></div>
-                         <span className="text-[#004f94] font-bold text-sm">Compressing...</span>
-                       </div>
-                    ) : formData.image ? (
-                        <div className="relative z-20">
-                            <img src={formData.image} alt="Preview" className="h-32 object-contain mb-3 rounded shadow-md bg-white" />
-                            <div className="text-sm text-[#004f94] font-medium bg-white px-3 py-1 rounded-full shadow-sm inline-block border border-[#004f94]/20">Click to change</div>
-                        </div>
-                    ) : (
-                        <>
-                            <div className="bg-white p-3 rounded-full shadow-md mb-3 group-hover:scale-110 transition-transform text-[#004f94]">
-                                <CloudUpload size={28} />
-                            </div>
-                            <span className="text-[#004f94] font-bold text-lg">Choose File</span>
-                            <span className="text-xs text-[#6c757d] mt-1 font-medium">Supports JPG, PNG</span>
-                        </>
-                    )}
+                  {isUploading ? (
+                    <div className="flex flex-col items-center justify-center py-4">
+                      <div className="w-8 h-8 border-4 border-[#004f94] border-t-transparent rounded-full animate-spin mb-2"></div>
+                      <span className="text-[#004f94] font-bold text-sm">Uploading...</span>
+                    </div>
+                  ) : formData.image ? (
+                    <div className="relative z-20">
+                      <img src={formData.image} alt="Preview" className="h-32 object-contain mb-3 rounded shadow-md bg-white" />
+                      <div className="text-sm text-[#004f94] font-medium bg-white px-3 py-1 rounded-full shadow-sm inline-block border border-[#004f94]/20">Click to change</div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="bg-white p-3 rounded-full shadow-md mb-3 group-hover:scale-110 transition-transform text-[#004f94]">
+                        <CloudUpload size={28} />
+                      </div>
+                      <span className="text-[#004f94] font-bold text-lg">Choose File</span>
+                      <span className="text-xs text-[#6c757d] mt-1 font-medium">Supports JPG, PNG</span>
+                    </>
+                  )}
                 </div>
               </div>
-              {formData.image && !isCompressing && (
-                  <button 
-                    onClick={() => setFormData({...formData, image: ''})}
-                    className="mt-2 text-sm text-red-600 hover:underline flex items-center gap-1 font-medium"
-                  >
-                      <X size={14} /> Remove Image
-                  </button>
+              {formData.image && !isUploading && (
+                <button
+                  onClick={() => setFormData({ ...formData, image: '' })}
+                  className="mt-2 text-sm text-red-600 hover:underline flex items-center gap-1 font-medium"
+                >
+                  <X size={14} /> Remove Image
+                </button>
               )}
             </div>
 
             <div className="flex justify-end gap-4">
-              <button 
+              <button
                 onClick={() => setShowTransactionForm(false)}
                 className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 onClick={handleSaveTransaction}
-                disabled={isCompressing}
+                disabled={isUploading}
                 className="px-6 py-2 bg-[#004f94] text-white rounded-lg hover:bg-[#00386b] font-bold shadow-lg transition-colors disabled:opacity-50"
               >
-                {editingTransaction 
-                 ? (editingTransaction._isPending ? 'Update Request' : (user.role === 'assistant' ? 'Request Update' : 'Update Transaction')) 
-                 : (user.role === 'assistant' ? 'Request Save' : 'Save Transaction')}
+                {editingTransaction
+                  ? (editingTransaction._isPending ? 'Update Request' : (user.role === 'assistant' ? 'Request Update' : 'Update Transaction'))
+                  : (user.role === 'assistant' ? 'Request Save' : 'Save Transaction')}
               </button>
             </div>
           </div>
@@ -631,18 +631,18 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
             </div>
             <h3 className="text-xl font-bold text-[#004f94] mb-2">{user.role === 'assistant' ? 'Request Delete?' : 'Delete Event?'}</h3>
             <p className="text-[#6c757d] mb-6">
-              {user.role === 'assistant' 
-               ? `Send request to delete "${event.name}"? Admin approval required.`
-               : `Are you sure you want to delete "${event.name}"? This action cannot be undone and all transactions will be lost.`}
+              {user.role === 'assistant'
+                ? `Send request to delete "${event.name}"? Admin approval required.`
+                : `Are you sure you want to delete "${event.name}"? This action cannot be undone and all transactions will be lost.`}
             </p>
             <div className="flex justify-center gap-4">
-              <button 
+              <button
                 onClick={() => setShowDeleteConfirm(false)}
                 className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 onClick={handleDeleteEvent}
                 className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-md"
               >
@@ -666,18 +666,18 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
             <p className="text-[#6c757d] mb-6">
               {transactionToDelete._isPending
                 ? `Cancel your pending request for "${transactionToDelete.name}"?`
-                : (user.role === 'assistant' 
+                : (user.role === 'assistant'
                   ? `Send request to delete "${transactionToDelete.name}"? Admin approval required.`
                   : `Are you sure you want to delete "${transactionToDelete.name}"? This action cannot be undone.`)}
             </p>
             <div className="flex justify-center gap-4">
-              <button 
+              <button
                 onClick={() => setTransactionToDelete(null)}
                 className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 onClick={confirmDeleteTransaction}
                 className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-md"
               >
@@ -691,20 +691,20 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
       {/* Image Preview Modal */}
       {showImageModal && (
         <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-[1100] p-4" onClick={() => setShowImageModal(null)}>
-          <button 
+          <button
             className="absolute top-4 right-4 text-white hover:text-gray-300 transition-colors"
             onClick={() => setShowImageModal(null)}
           >
             <X size={32} />
           </button>
-          <img 
-            src={showImageModal} 
-            alt="Full Preview" 
+          <img
+            src={showImageModal}
+            alt="Full Preview"
             className="max-w-full max-h-[90vh] rounded-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
-          <a 
-            href={showImageModal} 
+          <a
+            href={showImageModal}
             download="receipt_image.jpg"
             className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-[#004f94] text-white px-6 py-3 rounded-full font-bold flex items-center gap-2 hover:bg-[#00386b] transition-colors shadow-lg"
             onClick={(e) => e.stopPropagation()}

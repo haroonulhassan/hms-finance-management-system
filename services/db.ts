@@ -105,12 +105,12 @@ export const verifyBackupCode = async (code: string): Promise<boolean> => {
   return res.success;
 };
 
-export const resetAdminPassword = async (backupCode: string, newPassword: string): Promise<boolean> => {
+export const resetAdminPassword = async (backupCode: string, newPassword: string): Promise<{ success: boolean; newCodesGenerated?: boolean }> => {
   const res = await api(`/auth/reset-admin`, {
     method: 'POST',
     body: JSON.stringify({ backupCode, newPassword })
   });
-  return res.success;
+  return { success: res.success, newCodesGenerated: res.newCodesGenerated };
 };
 
 export const getPublicCredentials = async () => {
@@ -119,6 +119,36 @@ export const getPublicCredentials = async () => {
   } catch (e) {
     return { adminUsername: 'Admin', userUsername: 'User', assistantUsername: 'Assistant' };
   }
+};
+
+// --- Image Upload Service ---
+
+export const uploadImage = async (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+
+    reader.onload = async () => {
+      try {
+        const base64 = reader.result as string;
+        console.log('📤 Uploading image to Cloudinary, size:', Math.round(base64.length / 1024), 'KB');
+        const response = await api(`/upload-image`, {
+          method: 'POST',
+          body: JSON.stringify({ image: base64 })
+        });
+        console.log('✅ Upload successful, URL:', response.url);
+        resolve(response.url);
+      } catch (error: any) {
+        console.error('❌ Upload failed:', error);
+        reject(error);
+      }
+    };
+
+    reader.onerror = (error) => {
+      console.error('❌ File read error:', error);
+      reject(error);
+    };
+  });
 };
 
 // --- Request / Approval Services ---
@@ -240,6 +270,16 @@ export const createEvent = async (name: string): Promise<EventData> => {
 };
 
 export const deleteEvent = async (id: string): Promise<void> => {
+  // First, delete all pending requests related to this event
+  const allRequests = await getPendingRequests();
+  const relatedRequests = allRequests.filter(req => req.data && req.data.eventId === id);
+
+  // Delete each related request
+  for (const req of relatedRequests) {
+    await deleteRequest(req.id);
+  }
+
+  // Then delete the event itself
   await api(`/events/${id}/delete`, { method: 'PUT' });
 };
 

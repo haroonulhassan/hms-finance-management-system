@@ -20,6 +20,14 @@ export const StatsCard: React.FC<StatsCardProps> = ({
   gradientFrom = 'from-purple-500',
   gradientTo = 'to-cyan-500'
 }) => {
+  // Format amount: show K for values >= 100,000
+  const formatAmount = (value: number): string => {
+    if (value >= 100000) {
+      return (value / 1000).toFixed(1) + 'K';
+    }
+    return value.toLocaleString();
+  };
+
   return (
     <div className="glass-strong rounded-2xl p-6 hover-lift group relative overflow-hidden border border-white/10">
       <div className="flex items-center justify-between mb-4">
@@ -28,7 +36,7 @@ export const StatsCard: React.FC<StatsCardProps> = ({
         </div>
         <div className="text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>
           <span className="text-sm font-normal mr-1" style={{ color: 'var(--text-secondary)' }}>PKR</span>
-          {amount.toLocaleString()}
+          {formatAmount(amount)}
         </div>
       </div>
       <p className="text-sm font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>{title}</p>

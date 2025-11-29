@@ -1,8 +1,43 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { Auth, Event, Request } = require('./models');
+const cloudinary = require('cloudinary').v2;
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Email Configuration
+const nodemailer = require('nodemailer');
+
+const transporter = nodemailer.createTransport({
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // Use STARTTLS
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  },
+  tls: {
+    rejectUnauthorized: false // Allow self-signed certificates (for development)
+  }
+});
+
+// Verify transporter configuration on startup
+transporter.verify(function (error, success) {
+  if (error) {
+    console.error('❌ Email transporter verification failed:', error.message);
+    console.log('⚠️ Please check your EMAIL_USER and EMAIL_PASS in .env file');
+    console.log('📝 EMAIL_PASS must be a Gmail App Password (16 characters)');
+    console.log('🔗 Generate at: https://myaccount.google.com/apppasswords');
+  } else {
+    console.log('✅ Email transporter is ready to send emails');
+  }
+});
 
 console.log('🚀 Server script started...');
 
@@ -12,7 +47,8 @@ const PORT = 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
 app.use(cors());
-app.use(express.json({ limit: '58.3kb' })); // Increased limit for base64 images
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Database Connection
 let isDbConnected = false;
@@ -218,13 +254,147 @@ app.post('/api/auth/reset-admin', async (req, res) => {
       admin.password = newPassword;
       // Remove the used backup code
       admin.backupCodes = admin.backupCodes.filter(c => c !== backupCode);
+
+      // Generate a new unique backup code to replace the used one
+      let newCode;
+      do {
+        newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+      } while (admin.backupCodes.includes(newCode)); // Ensure it's unique
+
+      admin.backupCodes.push(newCode);
+      console.log('🔐 Generated new backup code:', newCode);
+      console.log('📋 Current backup codes count:', admin.backupCodes.length);
+
+      // Send new backup codes via email
+      try {
+        const mailOptions = {
+          from: process.env.EMAIL_USER,
+          to: process.env.ADMIN_EMAIL,
+          subject: 'HMS Finance - New Backup Code Generated',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0; font-size: 28px;">HMS Finance</h1>
+                <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0;">Password Reset Successful</p>
+              </div>
+              <div style="background: white; padding: 30px; border-radius: 0 0 10px 10px;">
+                <h2 style="color: #333; margin-top: 0;">Your New Backup Code</h2>
+                <p style="color: #666; line-height: 1.6;">Your admin password has been successfully reset. Here is your new backup code for future password recovery:</p>
+                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                  <div style="background: white; padding: 12px; margin: 8px 0; border-left: 4px solid #667eea; font-family: monospace; font-size: 16px; font-weight: bold; color: #333;">
+                    ${newCode}
+                  </div>
+                </div>
+                <p style="color: #999; font-size: 14px; margin-top: 20px;">
+                  <strong>Note:</strong> This code can only be used once. Keep this code secure and save it in a safe place.
+                </p>
+                <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-top: 20px; border-radius: 4px;">
+                  <p style="color: #856404; margin: 0; font-size: 14px;">
+                    <strong>⚠️ Important:</strong> Store this code securely. You'll need it if you forget your password again.
+                  </p>
+                </div>
+              </div>
+            </div>
+          `
+        };
+
+        await transporter.sendMail(mailOptions);
+        console.log('✅ New backup code sent to:', process.env.ADMIN_EMAIL);
+      } catch (emailError) {
+        console.error('❌ Failed to send new backup code email:', emailError);
+        // Don't fail the password reset if email fails
+      }
+
       await admin.save();
-      res.json({ success: true });
+      res.json({ success: true, newCodeGenerated: true });
     } else {
       res.json({ success: false, error: 'Invalid backup code' });
     }
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/upload-image', async (req, res) => {
+  try {
+    console.log('📸 Upload image request received');
+    const { image } = req.body; // Expect base64 string or image URL
+    if (!image) {
+      console.log('❌ No image provided in request body');
+      return res.status(400).json({ error: 'No image provided' });
+    }
+    console.log('✅ Image data received, length:', image.length);
+    console.log('🔧 Cloudinary config:', {
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY ? '***' : 'MISSING',
+      api_secret: process.env.CLOUDINARY_API_SECRET ? '***' : 'MISSING'
+    });
+    console.log('☁️ Uploading to Cloudinary...');
+    const result = await cloudinary.uploader.upload(image, { folder: 'hms' });
+    console.log('✅ Upload successful:', result.secure_url);
+    res.json({ url: result.secure_url });
+  } catch (e) {
+    console.error('❌ Cloudinary upload error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Send Backup Code via Email (One code per request)
+app.post('/api/send-backup-codes', async (req, res) => {
+  try {
+    console.log('📧 Backup code email request received');
+    await connectDB();
+    const admin = await Auth.findOne({ role: 'admin' });
+
+    if (!admin || !admin.backupCodes || admin.backupCodes.length === 0) {
+      console.log('❌ No backup codes available');
+      return res.status(404).json({ error: 'No backup codes available' });
+    }
+
+    // Get the first available backup code
+    const backupCode = admin.backupCodes[0];
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: process.env.ADMIN_EMAIL,
+      subject: 'HMS Finance - Password Recovery Code',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">HMS Finance</h1>
+            <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0;">Password Recovery</p>
+          </div>
+          <div style="background: white; padding: 30px; border-radius: 0 0 10px 10px;">
+            <h2 style="color: #333; margin-top: 0;">Your Backup Code</h2>
+            <p style="color: #666; line-height: 1.6;">Use this code to reset your admin password:</p>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center;">
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px; display: inline-block;">
+                <div style="font-family: monospace; font-size: 32px; font-weight: bold; color: white; letter-spacing: 4px;">
+                  ${backupCode}
+                </div>
+              </div>
+            </div>
+            <p style="color: #999; font-size: 14px; margin-top: 20px;">
+              <strong>Note:</strong> This code can only be used once. After using it, you'll receive a new unique code for future password resets.
+            </p>
+            <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-top: 20px; border-radius: 4px;">
+              <p style="color: #856404; margin: 0; font-size: 14px;">
+                <strong>⚠️ Important:</strong> Keep this code secure and don't share it with anyone.
+              </p>
+            </div>
+          </div>
+        </div>
+      `
+    };
+
+    console.log('📤 Sending backup code to:', process.env.ADMIN_EMAIL);
+    console.log('🔑 Code being sent:', backupCode);
+    await transporter.sendMail(mailOptions);
+    console.log('✅ Email sent successfully');
+    res.json({ success: true });
+  } catch (error) {
+    console.error('❌ Email send error:', error);
+    res.status(500).json({ error: 'Failed to send email' });
   }
 });
 
@@ -285,7 +455,45 @@ app.put('/api/events/:id/restore', async (req, res) => {
 
 app.delete('/api/events/:id', async (req, res) => {
   try {
-    await Event.findOneAndDelete({ id: req.params.id });
+    const event = await Event.findOne({ id: req.params.id });
+    if (event) {
+      // Delete associated images from Cloudinary
+      const imageDeletionPromises = [];
+
+      for (const tx of event.transactions) {
+        if (tx.image && tx.image.includes('cloudinary.com')) {
+          try {
+            // Robust extraction using Regex
+            // Matches everything after /upload/ (and optional version v123...) up to the last dot
+            const regex = /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/;
+            const match = tx.image.match(regex);
+
+            if (match && match[1]) {
+              const publicId = match[1];
+              console.log(`🔍 Extracted Public ID: "${publicId}" from URL: "${tx.image}"`);
+
+              imageDeletionPromises.push(
+                cloudinary.uploader.destroy(publicId).then(result => {
+                  console.log(`Cloudinary destroy result for ${publicId}:`, result);
+                  return result;
+                })
+              );
+            } else {
+              console.warn(`⚠️ Could not extract Public ID from URL: ${tx.image}`);
+            }
+          } catch (err) {
+            console.error('❌ Failed to parse/delete image:', tx.image, err);
+          }
+        }
+      }
+
+      if (imageDeletionPromises.length > 0) {
+        await Promise.all(imageDeletionPromises);
+        console.log(`✅ Deleted ${imageDeletionPromises.length} images from Cloudinary`);
+      }
+
+      await Event.findOneAndDelete({ id: req.params.id });
+    }
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -326,6 +534,27 @@ app.delete('/api/events/:id/transactions/:txId', async (req, res) => {
   try {
     const event = await Event.findOne({ id: req.params.id });
     if (!event) return res.status(404).json({ error: 'Event not found' });
+
+    const transactionToDelete = event.transactions.find(t => t.id === req.params.txId);
+
+    if (transactionToDelete && transactionToDelete.image && transactionToDelete.image.includes('cloudinary.com')) {
+      try {
+        const regex = /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/;
+        const match = transactionToDelete.image.match(regex);
+
+        if (match && match[1]) {
+          const publicId = match[1];
+          console.log(`🔍 Extracted Public ID: "${publicId}" from URL: "${transactionToDelete.image}"`);
+
+          const result = await cloudinary.uploader.destroy(publicId);
+          console.log(`Cloudinary destroy result for ${publicId}:`, result);
+        } else {
+          console.warn(`⚠️ Could not extract Public ID from URL: ${transactionToDelete.image}`);
+        }
+      } catch (err) {
+        console.error('❌ Failed to delete transaction image:', err);
+      }
+    }
 
     event.transactions = event.transactions.filter(t => t.id !== req.params.txId);
     await event.save();

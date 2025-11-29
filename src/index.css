@@ -539,3 +539,230 @@ body.light-mode .input-web3:focus {
   display: none;
   /* Chrome, Safari and Opera */
 }
+
+/* Custom light mode transaction background */
+/* Danger Button - Destructive actions */
+.btn-danger {
+  position: relative;
+  padding: 12px 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: var(--transition-smooth);
+  background: var(--gradient-danger);
+  color: white;
+}
+
+.btn-danger::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transition: left 0.5s;
+}
+
+.btn-danger:hover::before {
+  left: 100%;
+}
+
+.btn-danger:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--glow-danger);
+}
+
+/* Success Button - Positive actions */
+.btn-success {
+  position: relative;
+  padding: 12px 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: var(--transition-smooth);
+  background: var(--gradient-success);
+  color: white;
+}
+
+.btn-success::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  transition: left 0.5s;
+}
+
+.btn-success:hover::before {
+  left: 100%;
+}
+
+.btn-success:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--glow-success);
+}
+
+/* ========================================
+   CARD STYLES - Consistent across all pages
+   ======================================== */
+
+.card-web3 {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  padding: 24px;
+  transition: var(--transition-smooth);
+}
+
+.card-web3:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+}
+
+/* ========================================
+   INPUT & FORM STYLES
+   ======================================== */
+
+.input-web3 {
+  width: 100%;
+  padding: 14px 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  transition: var(--transition-smooth);
+}
+
+.input-web3:focus {
+  outline: none;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.input-web3::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Light mode input adjustments */
+body.light-mode .input-web3 {
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .input-web3:focus {
+  background: rgba(255, 255, 255, 1);
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+
+/* ========================================
+   MODAL STYLES
+   ======================================== */
+
+.modal-web3 {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-overlay {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+/* ========================================
+   UTILITY CLASSES
+   ======================================== */
+
+.text-gradient-primary {
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.text-gradient-accent {
+  background: var(--gradient-accent);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.bg-mesh {
+  background: var(--bg-dark-primary);
+  background-image: var(--gradient-mesh);
+}
+
+/* Theme-aware text utilities - Override Tailwind slate colors */
+.text-slate-200 {
+  color: var(--text-primary) !important;
+}
+
+.text-slate-300 {
+  color: var(--text-secondary) !important;
+}
+
+.text-slate-400 {
+  color: var(--text-tertiary) !important;
+}
+
+/* Scrollbar Hide Utility */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+  /* Chrome, Safari and Opera */
+}
+
+/* Custom light mode transaction background */
+body.light-mode .bg-\[rgba\(242\,242\,249\,0\.49\)\] {
+  background-color: rgba(242, 242, 249, 0.49) !important;
+}
+
+/* Card Web3 - Dark Mode Only */
+body:not(.light-mode) .card-web3 {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  padding: 24px;
+  transition: var(--transition-smooth);
+}
+
+/* Custom Verify Button Style for Light Mode */
+body.light-mode .btn-verify {
+  background: var(--gradient-primary);
+  color: white;
+  border: none;
+}
+
+body.light-mode .btn-verify:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--glow-primary);
+}
+
+/* Custom cyan text color override */
+.text-cyan-400 {
+  --tw-text-opacity: 1;
+  color: rgb(34 211 238 / var(--tw-text-opacity, 1));
+}

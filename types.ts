@@ -19,15 +19,16 @@ export interface Transaction {
   name: string;
   amount: number;
   type: TransactionType;
-  image?: string; // Base64 string
+  image?: string; // Cloudinary URL
   date: string; // ISO Date string YYYY-MM-DD
   description?: string;
-  
+
   // UI Only properties for pending requests
   _isPending?: boolean;
   _requestId?: string;
   _pendingAction?: 'add' | 'update' | 'delete';
   _pendingData?: Transaction; // To store the proposed changes for updates
+  _fullRequest?: PendingRequest; // Full request object for approval/rejection
 }
 
 export interface EventData {

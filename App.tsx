@@ -112,8 +112,11 @@ const App: React.FC = () => {
   // Show loading state while checking localStorage
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#004f94] to-[#002a5c]">
-        <div className="text-white text-xl font-semibold">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-mesh">
+        <div className="glass-strong px-8 py-4 rounded-2xl flex items-center gap-3">
+          <div className="w-6 h-6 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+          <div className="text-xl font-bold text-gradient-primary">Loading HMS...</div>
+        </div>
       </div>
     );
   }

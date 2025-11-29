@@ -89,18 +89,41 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       return;
     }
 
-    const success = await resetAdminPassword(backupCode, newPassword);
-    if (success) {
-      setForgotSuccess('Password reset successfully! Please login.');
+    const result = await resetAdminPassword(backupCode, newPassword);
+    if (result.success) {
+      // A new unique backup code is generated after password reset
+      setForgotSuccess('✅ Password reset successfully! A new backup code has been sent to your email.');
       setTimeout(() => {
         setShowForgot(false);
         setForgotSuccess('');
         setForgotStep(1);
         setBackupCode('');
         setNewPassword('');
-      }, 2000);
+      }, 3000);
     } else {
       setForgotError('Failed to reset password. Please try again.');
+    }
+  };
+
+  const handleRequestBackupCodes = async () => {
+    setForgotError('');
+    setForgotSuccess('');
+    try {
+      const response = await fetch(`http://localhost:5000/api/send-backup-codes`, {
+        method: 'POST'
+      });
+      const data = await response.json();
+      if (data.success) {
+        setForgotSuccess('✅ Backup code sent to hmsfinance.management@gmail.com! Check your inbox.');
+        // Auto-clear success message after 2 seconds
+        setTimeout(() => {
+          setForgotSuccess('');
+        }, 2000);
+      } else {
+        setForgotError(data.error || 'Failed to send backup code');
+      }
+    } catch (error) {
+      setForgotError('Network error. Please try again.');
     }
   };
 
@@ -237,8 +260,15 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 {forgotStep === 1 ? (
                   <div className="space-y-4">
                     <p className="text-sm text-slate-300">
-                      Please enter one of your <strong className="text-cyan-400">Backup Codes</strong> to verify your identity.
+                      Click below to receive your backup code via email, or enter a code manually.
                     </p>
+                    <button
+                      onClick={handleRequestBackupCodes}
+                      className="btn-web3 w-full py-3 flex items-center justify-center gap-2"
+                    >
+                      <span>📧</span> Send Code to Email
+                    </button>
+
                     <input
                       type="text"
                       className="input-web3"
@@ -248,7 +278,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     />
                     <button
                       onClick={handleForgotVerify}
-                      className="btn-web3 w-full py-3"
+                      className="btn-secondary w-full py-3 btn-verify"
                     >
                       Verify Code
                     </button>

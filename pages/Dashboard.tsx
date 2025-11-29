@@ -14,12 +14,16 @@ import {
   RotateCcw,
   User as UserIcon,
   FlaskConical,
-  Check
+  Check,
+  AlertCircle,
+  Edit,
+  CloudUpload,
+  Image as ImageIcon
 } from 'lucide-react';
 import { Header } from '../components/Header';
 import { StatsCard } from '../components/StatsCard';
 import { Skeleton } from '../components/Skeleton';
-import { EventData, User, UserRole, PendingRequest } from '../types';
+import { EventData, User, UserRole, PendingRequest, Transaction } from '../types';
 import {
   getEvents,
   createEvent,
@@ -33,7 +37,12 @@ import {
   approveRequest,
   deleteRequest,
   getUnreadRequestCount,
-  markAllRequestsAsRead
+  markAllRequestsAsRead,
+  updateTransaction,
+  deleteTransaction,
+  addTransaction,
+  updateRequest,
+  uploadImage
 } from '../services/db';
 
 interface DashboardProps {
@@ -51,6 +60,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newEventName, setNewEventName] = useState('');
+  const [createError, setCreateError] = useState('');
 
   // Settings Modal State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -68,6 +78,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
   const [userCreds, setUserCreds] = useState({ username: '', password: '' });
   const [assistantCreds, setAssistantCreds] = useState({ username: '', password: '' });
   const [credStatus, setCredStatus] = useState('');
+
+  // Dashboard Search & Filter State
+  const [dashboardSearch, setDashboardSearch] = useState('');
+  const [dashboardFilterType, setDashboardFilterType] = useState('all');
+
+  // Transaction Management State
+  const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [transactionToDelete, setTransactionToDelete] = useState<any | null>(null); // any because it has eventId
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    amount: '',
+    date: new Date().toISOString().split('T')[0],
+    type: 'collection' as 'collection' | 'expense' | 'loan',
+    description: '',
+    image: ''
+  });
 
   const navigate = useNavigate();
 
@@ -92,6 +122,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
     if (user.role === 'admin') {
       const reqs = await getPendingRequests();
       setPendingRequests(reqs);
+    } else if (user.role === 'assistant') {
+      // Load only assistant's own requests
+      const allReqs = await getPendingRequests();
+      const myReqs = allReqs.filter(req => req.requestedBy === user.username);
+      setPendingRequests(myReqs);
     }
   };
 
@@ -107,6 +142,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
     if (user.role === 'admin') {
       loadRequests();
       loadUnread();
+    } else if (user.role === 'assistant') {
+      // Load assistant's own requests
+      loadRequests();
     }
   }, [user.role]);
 
@@ -133,8 +171,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
 
   const handleCreateEvent = async () => {
     if (!newEventName.trim()) return;
+    setCreateError('');
 
+    // Check for duplicate name in existing events (case-insensitive)
+    const isDuplicateEvent = events.some(e => e.name.toLowerCase() === newEventName.trim().toLowerCase());
+    if (isDuplicateEvent) {
+      setCreateError('Event name already exists. Please choose a different name.');
+      return;
+    }
+
+    // For assistants, also check pending create_event requests
     if (user.role === 'assistant') {
+      const isDuplicateRequest = pendingRequests.some(
+        req => req.type === 'create_event' &&
+          req.data.name.toLowerCase() === newEventName.trim().toLowerCase()
+      );
+      if (isDuplicateRequest) {
+        setCreateError('You already have a pending request to create an event with this name.');
+        return;
+      }
+
       await createRequest(
         'create_event',
         { name: newEventName },
@@ -148,6 +204,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
     setNewEventName('');
     setIsModalOpen(false);
     loadEvents();
+    if (user.role === 'assistant') {
+      loadRequests();
+    }
   };
 
   const handleUpdateCredentials = async (role: UserRole) => {
@@ -227,12 +286,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
       if (t.type === 'loan') totalLoan += t.amount;
 
       // Store all transactions to show recent activity regardless of date
-      recentTransactions.push({ ...t, eventName: event.name });
+      recentTransactions.push({ ...t, eventName: event.name, eventId: event.id });
     });
   });
 
   // Sort by date descending to get most recent first
   recentTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  // Filter Recent Transactions
+  const filteredRecentTransactions = recentTransactions.filter(t => {
+    const matchesSearch = t.name.toLowerCase().includes(dashboardSearch.toLowerCase());
+    const matchesType = dashboardFilterType === 'all' || t.type === dashboardFilterType;
+    return matchesSearch && matchesType;
+  });
 
   // Loan does not affect remaining balance
   const remainingBalance = totalCollection - totalExpense;
@@ -431,6 +497,120 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
     }
   };
 
+  const handleEditTransaction = (tx: any) => {
+    setEditingTransaction(tx);
+    setSelectedEventId(tx.eventId);
+    setFormData({
+      name: tx.name,
+      amount: tx.amount.toString(),
+      date: tx.date,
+      type: tx.type,
+      description: tx.description || '',
+      image: tx.image || ''
+    });
+    setIsTransactionModalOpen(true);
+  };
+
+  const handleDeleteTransaction = (tx: any) => {
+    setTransactionToDelete(tx);
+    setSelectedEventId(tx.eventId);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setIsUploading(true);
+      try {
+        const imageUrl = await uploadImage(file);
+        setFormData(prev => ({ ...prev, image: imageUrl }));
+      } catch (error) {
+        console.error("Image upload failed:", error);
+        alert("Failed to upload image. Please try again.");
+      } finally {
+        setIsUploading(false);
+      }
+    }
+  };
+
+  const handleSaveTransaction = async () => {
+    if (!selectedEventId || !editingTransaction) return;
+
+    if (!formData.name || !formData.amount) return;
+
+    const amount = parseFloat(formData.amount);
+    if (isNaN(amount)) return;
+
+    try {
+      const newTxData = {
+        name: formData.name,
+        amount,
+        date: formData.date,
+        type: formData.type,
+        description: formData.description,
+        image: formData.image
+      };
+
+      const updated: Transaction = {
+        ...editingTransaction,
+        ...newTxData
+      };
+
+      // Find the event name for the request description
+      const eventName = events.find(e => e.id === selectedEventId)?.name || 'Unknown Event';
+
+      if (user.role === 'assistant') {
+        await createRequest(
+          'update_transaction',
+          { eventId: selectedEventId, eventName: eventName, transaction: updated },
+          `Update Transaction: "${formData.name}" in "${eventName}"`,
+          user.username
+        );
+      } else {
+        await updateTransaction(selectedEventId, updated);
+      }
+
+      setFormData({
+        name: '',
+        amount: '',
+        date: new Date().toISOString().split('T')[0],
+        type: 'collection',
+        description: '',
+        image: ''
+      });
+      setEditingTransaction(null);
+      setIsTransactionModalOpen(false);
+      loadEvents();
+    } catch (error) {
+      console.error("Failed to save transaction", error);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!selectedEventId || !transactionToDelete) return;
+
+    try {
+      const eventName = events.find(e => e.id === selectedEventId)?.name || 'Unknown Event';
+
+      if (user.role === 'assistant') {
+        await createRequest(
+          'delete_transaction',
+          { eventId: selectedEventId, eventName: eventName, transactionId: transactionToDelete.id, transactionName: transactionToDelete.name },
+          `Delete Transaction: "${transactionToDelete.name}" from "${eventName}"`,
+          user.username
+        );
+      } else {
+        await deleteTransaction(selectedEventId, transactionToDelete.id);
+      }
+
+      loadEvents();
+      setShowDeleteConfirm(false);
+      setTransactionToDelete(null);
+    } catch (error) {
+      console.error("Failed to delete transaction", error);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-mesh">
       <Header
@@ -504,6 +684,120 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                   const l = event.transactions.filter(t => t.type === 'loan').reduce((acc, t) => acc + t.amount, 0);
                   const b = c - e; // Balance excludes loan
 
+                  const handleEditTransaction = (tx: any) => {
+                    setEditingTransaction(tx);
+                    setSelectedEventId(tx.eventId);
+                    setFormData({
+                      name: tx.name,
+                      amount: tx.amount.toString(),
+                      date: tx.date,
+                      type: tx.type,
+                      description: tx.description || '',
+                      image: tx.image || ''
+                    });
+                    setIsTransactionModalOpen(true);
+                  };
+
+                  const handleDeleteTransaction = (tx: any) => {
+                    setTransactionToDelete(tx);
+                    setSelectedEventId(tx.eventId);
+                    setShowDeleteConfirm(true);
+                  };
+
+                  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setIsUploading(true);
+                      try {
+                        const imageUrl = await uploadImage(file);
+                        setFormData(prev => ({ ...prev, image: imageUrl }));
+                      } catch (error) {
+                        console.error("Image upload failed:", error);
+                        alert("Failed to upload image. Please try again.");
+                      } finally {
+                        setIsUploading(false);
+                      }
+                    }
+                  };
+
+                  const handleSaveTransaction = async () => {
+                    if (!selectedEventId || !editingTransaction) return;
+
+                    if (!formData.name || !formData.amount) return;
+
+                    const amount = parseFloat(formData.amount);
+                    if (isNaN(amount)) return;
+
+                    try {
+                      const newTxData = {
+                        name: formData.name,
+                        amount,
+                        date: formData.date,
+                        type: formData.type,
+                        description: formData.description,
+                        image: formData.image
+                      };
+
+                      const updated: Transaction = {
+                        ...editingTransaction,
+                        ...newTxData
+                      };
+
+                      // Find the event name for the request description
+                      const eventName = events.find(e => e.id === selectedEventId)?.name || 'Unknown Event';
+
+                      if (user.role === 'assistant') {
+                        await createRequest(
+                          'update_transaction',
+                          { eventId: selectedEventId, eventName: eventName, transaction: updated },
+                          `Update Transaction: "${formData.name}" in "${eventName}"`,
+                          user.username
+                        );
+                      } else {
+                        await updateTransaction(selectedEventId, updated);
+                      }
+
+                      setFormData({
+                        name: '',
+                        amount: '',
+                        date: new Date().toISOString().split('T')[0],
+                        type: 'collection',
+                        description: '',
+                        image: ''
+                      });
+                      setEditingTransaction(null);
+                      setIsTransactionModalOpen(false);
+                      loadEvents();
+                    } catch (error) {
+                      console.error("Failed to save transaction", error);
+                    }
+                  };
+
+                  const handleConfirmDelete = async () => {
+                    if (!selectedEventId || !transactionToDelete) return;
+
+                    try {
+                      const eventName = events.find(e => e.id === selectedEventId)?.name || 'Unknown Event';
+
+                      if (user.role === 'assistant') {
+                        await createRequest(
+                          'delete_transaction',
+                          { eventId: selectedEventId, eventName: eventName, transactionId: transactionToDelete.id, transactionName: transactionToDelete.name },
+                          `Delete Transaction: "${transactionToDelete.name}" from "${eventName}"`,
+                          user.username
+                        );
+                      } else {
+                        await deleteTransaction(selectedEventId, transactionToDelete.id);
+                      }
+
+                      loadEvents();
+                      setShowDeleteConfirm(false);
+                      setTransactionToDelete(null);
+                    } catch (error) {
+                      console.error("Failed to delete transaction", error);
+                    }
+                  };
+
                   return (
                     <div key={event.id} className="card-web3 p-6 hover-lift group">
                       <h3 className="text-xl font-bold mb-4 pb-2 border-b border-white/10" style={{ color: 'var(--text-primary)' }}>{event.name}</h3>
@@ -541,12 +835,123 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
           </div>
         </div>
 
+        {/* Pending Approvals Section (Admin Only) */}
+        {user.role === 'admin' && pendingRequests.length > 0 && (
+          <div className="glass-strong rounded-3xl shadow-2xl mb-8 border-l-4 border-l-yellow-400 border-white/10">
+            <div className="p-6 border-b border-white/10 flex justify-between items-center">
+              <h2 className="text-xl text-gradient-primary font-bold flex items-center gap-2">
+                <AlertCircle size={20} className="text-yellow-400" /> Pending Approvals
+              </h2>
+              <span className="bg-yellow-400/20 text-yellow-400 px-3 py-1 rounded-full text-xs font-bold">
+                {pendingRequests.length} Pending
+              </span>
+            </div>
+            <div className="p-6">
+              <div className="flex flex-col gap-4">
+                {pendingRequests.map((req) => (
+                  <div key={req.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg border border-white/10 hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors gap-4 shadow-sm">
+                    <div className="flex-1">
+                      <div className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
+                      <div className="text-xs flex gap-2 items-center" style={{ color: 'var(--text-tertiary)' }}>
+                        <span className="uppercase font-bold text-cyan-400">{req.type.replace('_', ' ')}</span>
+                        <span>•</span>
+                        <span>{req.requestedBy}</span>
+                        <span>•</span>
+                        <span>{new Date(req.timestamp).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button
+                        onClick={() => handleApproveRequest(req)}
+                        className="flex-1 sm:flex-none btn-success px-3 py-1.5 rounded text-sm font-bold flex items-center justify-center gap-1"
+                        title="Approve"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        onClick={() => handleRejectRequest(req.id)}
+                        className="flex-1 sm:flex-none btn-danger px-3 py-1.5 rounded text-sm font-bold flex items-center justify-center gap-1"
+                        title="Reject"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Assistant's Pending Requests */}
+        {user.role === 'assistant' && pendingRequests.length > 0 && (
+          <div className="glass-strong rounded-3xl shadow-2xl mb-8 border border-white/10 border-l-4 border-l-yellow-400">
+            <div className="p-6 border-b border-white/10">
+              <h2 className="text-xl text-gradient-primary font-bold flex items-center gap-2">
+                <AlertCircle size={24} className="text-yellow-400" />
+                My Pending Requests
+              </h2>
+            </div>
+            <div className="p-6">
+              <div className="flex flex-col gap-4">
+                {pendingRequests.map((req) => (
+                  <div key={req.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 mb-2 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg shadow-sm hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors gap-4">
+                    <div className="flex-1">
+                      <div className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
+                      <div className="text-xs flex gap-2 items-center" style={{ color: 'var(--text-tertiary)' }}>
+                        <span className="text-cyan-400 dark:text-blue-300 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
+                        <span>•</span>
+                        <span>{new Date(req.timestamp).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button
+                        onClick={() => handleRejectRequest(req.id)}
+                        className="flex-1 sm:flex-none btn-danger px-3 py-1.5 rounded text-sm font-bold flex items-center justify-center gap-1"
+                      >
+                        <X size={14} /> Cancel Request
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Recent Transactions */}
         <div className="glass-strong rounded-3xl shadow-2xl mb-8 border border-white/10">
           <div className="p-6 border-b border-white/10">
             <h2 className="text-xl text-gradient-primary font-bold">Recent Transactions</h2>
           </div>
           <div className="p-6">
+            {/* Search and Filter Controls */}
+            <div className="flex flex-col sm:flex-row gap-4 mb-6">
+              <div className="flex-1">
+                <input
+                  type="text"
+                  placeholder="Search transactions by title..."
+                  className="w-full bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all"
+                  style={{ color: 'var(--text-primary)' }}
+                  value={dashboardSearch}
+                  onChange={(e) => setDashboardSearch(e.target.value)}
+                />
+              </div>
+              <div className="sm:w-48">
+                <select
+                  className="w-full bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all appearance-none cursor-pointer"
+                  style={{ color: 'var(--text-primary)' }}
+                  value={dashboardFilterType}
+                  onChange={(e) => setDashboardFilterType(e.target.value)}
+                >
+                  <option value="all" className="bg-white dark:bg-slate-800">All Types</option>
+                  <option value="collection" className="bg-white dark:bg-slate-800">Collection</option>
+                  <option value="expense" className="bg-white dark:bg-slate-800">Expense</option>
+                  <option value="loan" className="bg-white dark:bg-slate-800">Loan</option>
+                </select>
+              </div>
+            </div>
+
             {loading ? (
               <div className="flex flex-col gap-4">
                 <Skeleton className="h-12 w-full" />
@@ -555,20 +960,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
               </div>
             ) : (
               <>
-                {recentTransactions.length === 0 ? (
-                  <p className="text-slate-300 text-center py-4">No recent transactions</p>
+                {filteredRecentTransactions.length === 0 ? (
+                  <p className="text-slate-300 text-center py-4">No transactions match your search.</p>
                 ) : (
-                  <div className="flex flex-col">
-                    {recentTransactions.slice(0, 7).map((t, idx) => (
-                      <div key={idx} className="flex justify-between items-center p-4 border-b border-white/10 last:border-0 hover:bg-white/5 transition-colors rounded-lg">
+                  <div className="flex flex-col gap-2">
+                    {filteredRecentTransactions.slice(0, 5).map((t) => (
+                      <div key={t.id} className="flex justify-between items-center p-4 mb-2 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg shadow-sm hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors group">
                         <div>
-                          <div className="font-semibold text-slate-200">{t.name}</div>
-                          <div className="text-sm text-slate-400">{t.eventName} • {new Date(t.date).toLocaleDateString()}</div>
+                          <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>{t.name}</div>
+                          <div className="text-sm" style={{ color: 'var(--text-tertiary)' }}>{t.eventName} • {new Date(t.date).toLocaleDateString()}</div>
                         </div>
-                        <div className={`font-bold ${t.type === 'collection' ? 'text-cyan-400' :
-                          t.type === 'expense' ? 'text-red-400' : 'text-orange-400'
-                          }`}>
-                          {t.type === 'collection' ? '+' : '-'}PKR {t.amount.toLocaleString()}
+                        <div className="flex items-center gap-4">
+                          <div className={`font-bold ${t.type === 'collection' ? 'text-cyan-400' :
+                            t.type === 'expense' ? 'text-red-400' : 'text-orange-400'
+                            }`}>
+                            {t.type === 'collection' ? '+' : '-'}PKR {t.amount.toLocaleString()}
+                          </div>
+
+                          {(user.role === 'admin' || user.role === 'assistant') && (
+                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => handleEditTransaction(t)}
+                                className="p-1.5 btn-primary rounded hover:scale-105 transition-all shadow-sm"
+                                title="Edit"
+                              >
+                                <Edit size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteTransaction(t)}
+                                className="p-1.5 btn-danger rounded hover:scale-105 transition-all shadow-sm"
+                                title="Delete"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -577,42 +1003,188 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
               </>
             )}
           </div>
-        </div>
-      </main>
+        </div >
+      </main >
 
       {/* Create Event Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000]">
-          <div className="glass-strong rounded-2xl p-8 w-[90%] max-w-[500px] shadow-2xl">
+      {
+        isModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000]">
+            <div className="glass-strong rounded-2xl p-8 w-[90%] max-w-[500px] shadow-2xl">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold text-gradient-primary">{user.role === 'assistant' ? 'Request Event' : 'Create New Event'}</h3>
+                <button onClick={() => setIsModalOpen(false)} className="text-red-500">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="mb-6">
+                <label className="block font-semibold mb-1 text-slate-200">Event Name</label>
+                <input
+                  type="text"
+                  className="input-web3"
+                  placeholder="Enter event name"
+                  value={newEventName}
+                  onChange={(e) => {
+                    setNewEventName(e.target.value);
+                    setCreateError('');
+                  }}
+                  autoFocus
+                />
+                {createError && <p className="text-red-500 text-sm mt-2">{createError}</p>}
+              </div>
+              <div className="flex justify-end gap-4">
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 bg-red-500 text-white rounded-lg font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateEvent}
+                  className="btn-web3 px-6 py-2"
+                >
+                  {user.role === 'assistant' ? 'Send Request' : 'Create Event'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Transaction Form Modal */}
+      {isTransactionModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
+          <div className="glass-strong rounded-2xl p-6 md:p-8 w-full max-w-[600px] shadow-2xl max-h-[90vh] overflow-y-auto scrollbar-hide">
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-bold text-gradient-primary">{user.role === 'assistant' ? 'Request Event' : 'Create New Event'}</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-red-500">
+              <h3 className="text-xl font-bold text-gradient-primary">
+                {editingTransaction ? 'Edit Transaction' : 'Add Transaction'}
+              </h3>
+              <button onClick={() => setIsTransactionModalOpen(false)} className="text-red-500">
                 <X size={24} />
               </button>
             </div>
-            <div className="mb-6">
-              <label className="block font-semibold mb-1 text-slate-200">Event Name</label>
-              <input
-                type="text"
-                className="input-web3"
-                placeholder="Enter event name"
-                value={newEventName}
-                onChange={(e) => setNewEventName(e.target.value)}
-                autoFocus
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Transaction Title *</label>
+                <input
+                  type="text"
+                  className="input-web3 w-full"
+                  placeholder="e.g. Monthly Fee"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Amount (PKR) *</label>
+                <input
+                  type="number"
+                  className="input-web3 w-full"
+                  placeholder="0.00"
+                  value={formData.amount}
+                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Date</label>
+                <input
+                  type="date"
+                  className="input-web3 w-full"
+                  value={formData.date}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Type</label>
+                <select
+                  className="input-web3 w-full"
+                  value={formData.type}
+                  onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
+                >
+                  <option value="collection">Collection (+)</option>
+                  <option value="expense">Expense (-)</option>
+                  <option value="loan">Loan (Neutral)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="block font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Description (Optional)</label>
+              <textarea
+                className="input-web3 w-full h-24 resize-none"
+                placeholder="Add details..."
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               />
             </div>
+
+            <div className="mb-6">
+              <label className="block font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Receipt Image (Optional)</label>
+              <div className="flex items-center gap-4">
+                <label className="cursor-pointer btn-web3 px-4 py-2 flex items-center gap-2 text-sm">
+                  <CloudUpload size={18} /> Upload Image
+                  <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+                </label>
+                {isUploading && <span className="text-sm text-cyan-400 animate-pulse">Uploading...</span>}
+                {formData.image && (
+                  <div className="relative group">
+                    <img src={formData.image} alt="Receipt" className="h-12 w-12 object-cover rounded border border-white/20" />
+                    <button
+                      onClick={() => setFormData({ ...formData, image: '' })}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="flex justify-end gap-4">
               <button
-                onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg font-medium"
+                onClick={() => setIsTransactionModalOpen(false)}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg font-medium hover:bg-red-600 transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={handleCreateEvent}
+                onClick={handleSaveTransaction}
                 className="btn-web3 px-6 py-2"
+                disabled={!formData.name || !formData.amount || isUploading}
               >
-                {user.role === 'assistant' ? 'Send Request' : 'Create Event'}
+                {user.role === 'assistant' ? 'Send Request' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000]">
+          <div className="glass-strong rounded-2xl p-8 w-[90%] max-w-[400px] shadow-2xl text-center">
+            <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500">
+              <AlertCircle size={32} />
+            </div>
+            <h3 className="text-xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>Confirm Deletion</h3>
+            <p className="mb-6" style={{ color: 'var(--text-secondary)' }}>
+              Are you sure you want to delete this transaction? This action cannot be undone.
+            </p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-2 bg-slate-600 text-white rounded-lg font-medium hover:bg-slate-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg font-medium hover:bg-red-600 transition-colors"
+              >
+                {user.role === 'assistant' ? 'Request Delete' : 'Delete'}
               </button>
             </div>
           </div>
@@ -620,330 +1192,341 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
       )}
 
       {/* Admin Requests Modal (Approval Center) */}
-      {isRequestsOpen && user.role === 'admin' && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
-          <div className="glass-strong rounded-2xl w-full max-w-[700px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="flex justify-between items-center p-6 border-b border-white/10">
-              <h3 className="text-2xl font-bold text-gradient-primary">Pending Approvals</h3>
-              <button onClick={() => setIsRequestsOpen(false)} className="text-red-500">
-                <X size={24} />
-              </button>
-            </div>
-            <div className="p-0 overflow-y-auto flex-1">
-              {pendingRequests.length === 0 ? (
-                <div className="text-center py-12 text-slate-300">
-                  <p>No pending requests.</p>
-                  <p className="text-sm mt-2">Actions taken by the Assistant will appear here.</p>
-                </div>
-              ) : (
-                <div className="divide-y divide-gray-100">
-                  {pendingRequests.map((req) => (
-                    <div key={req.id} className="p-6 hover:bg-white/5 transition-colors border-b border-white/10 last:border-0">
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex-1">
-                          <div className="font-bold text-slate-200 text-lg mb-1">{req.description}</div>
-                          <div className="text-sm text-gray-500 flex gap-2 items-center flex-wrap">
-                            <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
-                            <span>Requested by <span className="font-semibold text-gray-700">{req.requestedBy}</span></span>
-                            <span className="text-gray-300">•</span>
-                            <span>{new Date(req.timestamp).toLocaleString()}</span>
-                          </div>
-                          {req.type.includes('transaction') && req.data.transaction && (
-                            <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded text-sm">
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <span className="text-[#212529] font-semibold block mb-1">Amount:</span>
-                                  <strong className="text-[#212529] text-lg">PKR {req.data.transaction.amount.toLocaleString()}</strong>
-                                </div>
-                                <div>
-                                  <span className="text-[#212529] font-semibold block mb-1">Type:</span>
-                                  <span className={`uppercase font-bold px-2 py-1 rounded text-xs ${req.data.transaction.type === 'collection' ? 'bg-cyan-100 text-cyan-800' :
-                                    req.data.transaction.type === 'expense' ? 'bg-red-100 text-red-800' :
-                                      'bg-orange-100 text-orange-800'
-                                    }`}>
-                                    {req.data.transaction.type}
-                                  </span>
+      {
+        isRequestsOpen && user.role === 'admin' && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
+            <div className="bg-white dark:bg-[#1e293b] rounded-2xl w-full max-w-[700px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-white/10">
+              <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-white/10 bg-white dark:bg-transparent">
+                <h3 className="text-2xl font-bold text-gradient-primary">Pending Approvals</h3>
+                <button onClick={() => setIsRequestsOpen(false)} className="text-red-500">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-0 overflow-y-auto flex-1">
+                {pendingRequests.length === 0 ? (
+                  <div className="text-center py-12" style={{ color: 'var(--text-tertiary)' }}>
+                    <p>No pending requests.</p>
+                    <p className="text-sm mt-2">Actions taken by the Assistant will appear here.</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-100">
+                    {pendingRequests.map((req) => (
+                      <div key={req.id} className="card-web3 p-6 mb-3">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex-1">
+                            <div className="font-bold text-lg mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
+                            <div className="text-sm flex gap-2 items-center flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
+                              <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
+                              <span>Requested by <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>{req.requestedBy}</span></span>
+                              <span>•</span>
+                              <span>{new Date(req.timestamp).toLocaleString()}</span>
+                            </div>
+                            {req.type.includes('transaction') && req.data.transaction && (
+                              <div
+                                className="mt-3 p-3 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded text-sm"
+                                style={{ backgroundColor: theme === 'light' ? 'rgba(242, 242, 249, 0.49)' : undefined }}
+                              >
+                                <div className="grid grid-cols-3 gap-4 items-center" style={{ backgroundColor: 'transparent' }}>
+                                  <div>
+                                    <span className="font-semibold block mb-1" style={{ color: 'var(--text-secondary)' }}>Amount:</span>
+                                    <strong className="text-lg" style={{ color: 'var(--text-primary)' }}>PKR {req.data.transaction.amount.toLocaleString()}</strong>
+                                  </div>
+                                  <div>
+                                    <span className="font-semibold block mb-1" style={{ color: 'var(--text-secondary)' }}>Type:</span>
+                                    <span className={`uppercase font-bold px-2 py-1 rounded text-xs ${req.data.transaction.type === 'collection' ? 'bg-blue-100 text-blue-700 dark:bg-cyan-900/30 dark:text-cyan-300' :
+                                      req.data.transaction.type === 'expense' ? 'bg-blue-100 text-blue-700 dark:bg-red-900/30 dark:text-red-300' :
+                                        'bg-blue-100 text-blue-700 dark:bg-orange-900/30 dark:text-orange-300'
+                                      }`}>
+                                      {req.data.transaction.type}
+                                    </span>
+                                  </div>
+                                  <div className="flex gap-2 justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRejectRequest(req.id);
+                                      }}
+                                      className="p-2 btn-danger rounded-lg shadow-md hover:scale-105 transition-all"
+                                      title="Reject"
+                                    >
+                                      <X size={18} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleApproveRequest(req);
+                                      }}
+                                      className="p-2 btn-success rounded-lg shadow-md hover:scale-105 transition-all"
+                                      title="Approve"
+                                    >
+                                      <Check size={18} />
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          )}
+                            )}
+                          </div>
                         </div>
                       </div>
-                      <div className="flex justify-end gap-3 mt-4">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRejectRequest(req.id);
-                          }}
-                          className="px-4 py-2 btn-danger rounded-lg font-semibold text-sm shadow-md"
-                        >
-                          Reject
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleApproveRequest(req);
-                          }}
-                          className="px-4 py-2 btn-success rounded-lg font-semibold text-sm flex items-center gap-2 shadow-md"
-                        >
-                          <Check size={16} /> Approve
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Settings Modal */}
-      {isSettingsOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
-          <div className="glass-strong rounded-2xl w-full max-w-[600px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="flex justify-between items-center p-6 border-b border-white/10">
-              <h3 className="text-2xl font-bold text-gradient-primary">Settings</h3>
-              <button onClick={() => setIsSettingsOpen(false)} className="text-red-500">
-                <X size={24} />
-              </button>
-            </div>
+      {
+        isSettingsOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
+            <div className="glass-strong rounded-2xl w-full max-w-[600px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="flex justify-between items-center p-6 border-b border-white/10">
+                <h3 className="text-2xl font-bold text-gradient-primary">Settings</h3>
+                <button onClick={() => setIsSettingsOpen(false)} className="text-red-500">
+                  <X size={24} />
+                </button>
+              </div>
 
-            <div className="flex border-b">
-              <button
-                onClick={() => setSettingsTab('general')}
-                className={`flex-1 py-3 font-semibold text-sm transition-colors ${settingsTab === 'general' ? 'text-gradient-primary border-b-2 border-purple-500' : 'text-slate-400 hover:bg-white/5'}`}
-              >
-                Account Management
-              </button>
-              <button
-                onClick={() => setSettingsTab('recycle')}
-                className={`flex-1 py-3 font-semibold text-sm transition-colors ${settingsTab === 'recycle' ? 'text-gradient-primary border-b-2 border-purple-500' : 'text-slate-400 hover:bg-white/5'}`}
-              >
-                Recycle Bin
-              </button>
-            </div>
+              <div className="flex border-b">
+                <button
+                  onClick={() => setSettingsTab('general')}
+                  className={`flex-1 py-3 font-semibold text-sm transition-colors ${settingsTab === 'general' ? 'text-gradient-primary border-b-2 border-purple-500' : 'text-slate-400 hover:bg-white/5'}`}
+                >
+                  Account Management
+                </button>
+                <button
+                  onClick={() => setSettingsTab('recycle')}
+                  className={`flex-1 py-3 font-semibold text-sm transition-colors ${settingsTab === 'recycle' ? 'text-gradient-primary border-b-2 border-purple-500' : 'text-slate-400 hover:bg-white/5'}`}
+                >
+                  Recycle Bin
+                </button>
+              </div>
 
-            <div className="p-6 overflow-y-auto flex-1">
-              {settingsTab === 'general' ? (
-                <div className="space-y-8">
-                  {/* Testing Mode Settings */}
-                  <div className="glass p-4 rounded-lg border border-white/10">
-                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
-                      <FlaskConical size={18} /> Testing Mode
-                    </h4>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-bold" style={{ color: 'var(--text-primary)' }}>Enable Role Switching</div>
-                        <div className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
-                          Allows you to switch between Admin, Assistant, and User views to verify permissions and UI.
-                        </div>
-                      </div>
-                      <button
-                        onClick={onToggleTestingMode}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none`}
-                        style={{ background: testingMode ? 'var(--gradient-primary)' : 'rgba(255,255,255,0.2)' }}
-                      >
-                        <span
-                          className={`${testingMode ? 'translate-x-6' : 'translate-x-1'} inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
-                        />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Admin Settings */}
-                  <div className="glass p-4 rounded-lg border border-white/10">
-                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
-                      <UserIcon size={18} /> Update Admin Credentials
-                    </h4>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
-                        <input
-                          type="text"
-                          className="input-web3"
-                          value={adminCreds.username}
-                          onChange={(e) => setAdminCreds({ ...adminCreds, username: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
-                        <input
-                          type="password"
-                          className="input-web3"
-                          placeholder="Leave blank to keep current"
-                          value={adminCreds.password}
-                          onChange={(e) => setAdminCreds({ ...adminCreds, password: e.target.value })}
-                        />
-                      </div>
-                      <div className="flex justify-end mt-2">
-                        <button
-                          onClick={() => handleUpdateCredentials('admin')}
-                          className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
-                        >
-                          Update Admin
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Assistant Settings */}
-                  <div className="glass p-4 rounded-lg border border-white/10">
-                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
-                      <UserIcon size={18} /> Update Assistant Credentials
-                    </h4>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
-                        <input
-                          type="text"
-                          className="input-web3"
-                          value={assistantCreds.username}
-                          onChange={(e) => setAssistantCreds({ ...assistantCreds, username: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
-                        <input
-                          type="password"
-                          className="input-web3"
-                          placeholder="Leave blank to keep current"
-                          value={assistantCreds.password}
-                          onChange={(e) => setAssistantCreds({ ...assistantCreds, password: e.target.value })}
-                        />
-                      </div>
-                      <div className="flex justify-end mt-2">
-                        <button
-                          onClick={() => handleUpdateCredentials('assistant')}
-                          className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
-                        >
-                          Update Assistant
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* User Settings */}
-                  <div className="glass p-4 rounded-lg border border-white/10">
-                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
-                      <UserIcon size={18} /> Update User Credentials
-                    </h4>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
-                        <input
-                          type="text"
-                          className="input-web3"
-                          value={userCreds.username}
-                          onChange={(e) => setUserCreds({ ...userCreds, username: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
-                        <input
-                          type="password"
-                          className="input-web3"
-                          placeholder="Leave blank to keep current"
-                          value={userCreds.password}
-                          onChange={(e) => setUserCreds({ ...userCreds, password: e.target.value })}
-                        />
-                      </div>
-                      <div className="flex justify-end mt-2">
-                        <button
-                          onClick={() => handleUpdateCredentials('user')}
-                          className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
-                        >
-                          Update User
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {credStatus && (
-                    <div className={`p-3 rounded text-center text-sm font-bold ${credStatus.includes('Error') ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                      {credStatus}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* Recycle Bin Tab */
-                <div className="space-y-4">
-                  <div className="glass border border-yellow-500/30 p-4 rounded-lg flex items-start gap-3">
-                    <RotateCcw className="text-yellow-400 shrink-0 mt-1" size={20} />
-                    <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                      <p className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>Deleted Events</p>
-                      <p>Events here are hidden from the dashboard but can be restored. Permanently deleting them removes all associated data forever.</p>
-                    </div>
-                  </div>
-
-                  {deletedEvents.length === 0 ? (
-                    <div className="text-center py-8 italic" style={{ color: 'var(--text-tertiary)' }}>Recycle bin is empty</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {deletedEvents.map(evt => (
-                        <div key={evt.id} className="flex items-center justify-between p-4 glass rounded-lg border border-white/10">
-                          <div>
-                            <div className="font-bold" style={{ color: 'var(--text-primary)' }}>{evt.name}</div>
-                            <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{evt.transactions.length} transactions</div>
-                          </div>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleRestore(evt.id)}
-                              className="p-2 text-cyan-400 hover:bg-white/10 rounded transition-colors"
-                              title="Restore"
-                            >
-                              <RotateCcw size={18} />
-                            </button>
-                            <button
-                              onClick={() => handlePermanentDelete(evt.id)}
-                              className="p-2 text-red-400 hover:bg-white/10 rounded transition-colors"
-                              title="Permanently Delete"
-                            >
-                              <X size={18} />
-                            </button>
+              <div className="p-6 overflow-y-auto flex-1">
+                {settingsTab === 'general' ? (
+                  <div className="space-y-8">
+                    {/* Testing Mode Settings */}
+                    <div className="glass p-4 rounded-lg border border-white/10">
+                      <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                        <FlaskConical size={18} /> Testing Mode
+                      </h4>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-bold" style={{ color: 'var(--text-primary)' }}>Enable Role Switching</div>
+                          <div className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                            Allows you to switch between Admin, Assistant, and User views to verify permissions and UI.
                           </div>
                         </div>
-                      ))}
+                        <button
+                          onClick={onToggleTestingMode}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${!testingMode ? 'dark:bg-white/20' : ''}`}
+                          style={{ background: testingMode ? 'var(--gradient-primary)' : 'rgb(245, 245, 245)' }}
+                        >
+                          <span
+                            className={`${testingMode ? 'translate-x-6' : 'translate-x-1'} inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
+                          />
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              )}
+
+                    {/* Admin Settings */}
+                    <div className="glass p-4 rounded-lg border border-white/10">
+                      <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                        <UserIcon size={18} /> Update Admin Credentials
+                      </h4>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                          <input
+                            type="text"
+                            className="input-web3"
+                            value={adminCreds.username}
+                            onChange={(e) => setAdminCreds({ ...adminCreds, username: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
+                          <input
+                            type="password"
+                            className="input-web3"
+                            placeholder="Leave blank to keep current"
+                            value={adminCreds.password}
+                            onChange={(e) => setAdminCreds({ ...adminCreds, password: e.target.value })}
+                          />
+                        </div>
+                        <div className="flex justify-end mt-2">
+                          <button
+                            onClick={() => handleUpdateCredentials('admin')}
+                            className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
+                          >
+                            Update Admin
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Assistant Settings */}
+                    <div className="glass p-4 rounded-lg border border-white/10">
+                      <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                        <UserIcon size={18} /> Update Assistant Credentials
+                      </h4>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                          <input
+                            type="text"
+                            className="input-web3"
+                            value={assistantCreds.username}
+                            onChange={(e) => setAssistantCreds({ ...assistantCreds, username: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
+                          <input
+                            type="password"
+                            className="input-web3"
+                            placeholder="Leave blank to keep current"
+                            value={assistantCreds.password}
+                            onChange={(e) => setAssistantCreds({ ...assistantCreds, password: e.target.value })}
+                          />
+                        </div>
+                        <div className="flex justify-end mt-2">
+                          <button
+                            onClick={() => handleUpdateCredentials('assistant')}
+                            className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
+                          >
+                            Update Assistant
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* User Settings */}
+                    <div className="glass p-4 rounded-lg border border-white/10">
+                      <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                        <UserIcon size={18} /> Update User Credentials
+                      </h4>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                          <input
+                            type="text"
+                            className="input-web3"
+                            value={userCreds.username}
+                            onChange={(e) => setUserCreds({ ...userCreds, username: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
+                          <input
+                            type="password"
+                            className="input-web3"
+                            placeholder="Leave blank to keep current"
+                            value={userCreds.password}
+                            onChange={(e) => setUserCreds({ ...userCreds, password: e.target.value })}
+                          />
+                        </div>
+                        <div className="flex justify-end mt-2">
+                          <button
+                            onClick={() => handleUpdateCredentials('user')}
+                            className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
+                          >
+                            Update User
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {credStatus && (
+                      <div className={`p-3 rounded text-center text-sm font-bold ${credStatus.includes('Error') ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                        {credStatus}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Recycle Bin Tab */
+                  <div className="space-y-4">
+                    <div className="glass border border-yellow-500/30 p-4 rounded-lg flex items-start gap-3">
+                      <RotateCcw className="text-yellow-400 shrink-0 mt-1" size={20} />
+                      <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                        <p className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>Deleted Events</p>
+                        <p>Events here are hidden from the dashboard but can be restored. Permanently deleting them removes all associated data forever.</p>
+                      </div>
+                    </div>
+
+                    {deletedEvents.length === 0 ? (
+                      <div className="text-center py-8 italic" style={{ color: 'var(--text-tertiary)' }}>Recycle bin is empty</div>
+                    ) : (
+                      <div className="space-y-3">
+                        {deletedEvents.map(evt => (
+                          <div key={evt.id} className="flex items-center justify-between p-4 glass rounded-lg border border-white/10">
+                            <div>
+                              <div className="font-bold" style={{ color: 'var(--text-primary)' }}>{evt.name}</div>
+                              <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{evt.transactions.length} transactions</div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleRestore(evt.id)}
+                                className="p-2 text-cyan-400 hover:bg-white/10 rounded transition-colors"
+                                title="Restore"
+                              >
+                                <RotateCcw size={18} />
+                              </button>
+                              <button
+                                onClick={() => handlePermanentDelete(evt.id)}
+                                className="p-2 text-red-400 hover:bg-white/10 rounded transition-colors"
+                                title="Permanently Delete"
+                              >
+                                <X size={18} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {/* Modal Footer (if needed, currently mostly inside scroll area) */}
             </div>
-            {/* Modal Footer (if needed, currently mostly inside scroll area) */}
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Permanent Delete Confirmation Modal */}
-      {recycleDeleteId && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1100]">
-          <div className="glass-strong rounded-2xl p-8 w-[90%] max-w-[400px] shadow-2xl text-center">
-            <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Trash2 className="text-red-600" size={32} />
-            </div>
-            <h3 className="text-xl font-bold text-gradient-primary mb-2">Permanently Delete?</h3>
-            <p className="text-slate-300 mb-6">
-              This action cannot be undone. All transactions associated with this event will be lost forever.
-            </p>
-            <div className="flex justify-center gap-4">
-              <button
-                onClick={() => setRecycleDeleteId(null)}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={executePermanentDelete}
-                className="px-4 py-2 btn-danger rounded-lg font-bold shadow-md"
-              >
-                Delete Forever
-              </button>
+      {
+        recycleDeleteId && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1100]">
+            <div className="glass-strong rounded-2xl p-8 w-[90%] max-w-[400px] shadow-2xl text-center">
+              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Trash2 className="text-red-600" size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-gradient-primary mb-2">Permanently Delete?</h3>
+              <p className="text-slate-300 mb-6">
+                This action cannot be undone. All transactions associated with this event will be lost forever.
+              </p>
+              <div className="flex justify-center gap-4">
+                <button
+                  onClick={() => setRecycleDeleteId(null)}
+                  className="px-4 py-2 bg-red-500 text-white rounded-lg font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={executePermanentDelete}
+                  className="px-4 py-2 btn-danger rounded-lg font-bold shadow-md"
+                >
+                  Delete Forever
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 };

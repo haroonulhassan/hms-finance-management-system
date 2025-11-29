@@ -14,7 +14,7 @@ const TransactionSchema = new mongoose.Schema({
   name: { type: String, required: true },
   amount: { type: Number, required: true },
   type: { type: String, enum: ['collection', 'expense', 'loan'], required: true },
-  image: { type: String }, // Base64
+  image: { type: String }, // Cloudinary URL or Base64 (legacy)
   date: { type: String, required: true },
   description: { type: String }
 });
@@ -23,6 +23,7 @@ const EventSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
   isDeleted: { type: Boolean, default: false },
+  imageUrl: { type: String, default: '' },
   transactions: [TransactionSchema]
 });
 

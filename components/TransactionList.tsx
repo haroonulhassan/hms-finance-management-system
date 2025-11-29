@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { Transaction, UserRole } from '../types';
-import { Image as ImageIcon, Trash2, Edit, Clock, RefreshCw, AlertCircle } from 'lucide-react';
+import { Image as ImageIcon, Trash2, Edit, Clock, RefreshCw, AlertCircle, Check, X } from 'lucide-react';
 
 interface TransactionListProps {
   transactions: Transaction[];
@@ -9,6 +9,8 @@ interface TransactionListProps {
   onEdit: (tx: Transaction) => void;
   onDelete: (tx: Transaction) => void;
   onViewImage: (src: string) => void;
+  onApprove?: (tx: Transaction) => void;
+  onReject?: (tx: Transaction) => void;
 }
 
 export const TransactionList: React.FC<TransactionListProps> = ({
@@ -16,14 +18,21 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   userRole,
   onEdit,
   onDelete,
-  onViewImage
+  onViewImage,
+  onApprove,
+  onReject
 }) => {
+  const [showAll, setShowAll] = React.useState(false);
+  const INITIAL_LIMIT = 10;
+
   // Sort by date descending, but ensure we don't break if date is missing (though it shouldn't be)
   const sorted = [...transactions].sort((a, b) => {
     // Prioritize pending adds at the top if needed, or just by date
     // Let's stick to date
     return new Date(b.date).getTime() - new Date(a.date).getTime();
   });
+
+  const visibleTransactions = showAll ? sorted : sorted.slice(0, INITIAL_LIMIT);
 
   const getBadgeColor = (type: string) => {
     switch (type) {
@@ -36,7 +45,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse">
+      <table className="w-full border-separate border-spacing-y-2">
         <thead>
           <tr>
             <th className="p-4 text-left font-semibold border-b text-sm" style={{ background: 'var(--glass-bg)', borderColor: 'var(--glass-border)', color: 'var(--text-primary)' }}>Date</th>
@@ -48,41 +57,44 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((tx) => {
+          {visibleTransactions.map((tx) => {
             // Styles for pending rows
             const isPending = tx._isPending;
             const rowClass = isPending
-              ? 'bg-yellow-50 hover:bg-yellow-100 border-l-4 border-l-yellow-400'
-              : 'border-b hover:bg-white/5 transition-colors';
+              ? 'bg-slate-700/30 hover:bg-slate-700/50 border-l-4 border-l-yellow-400 shadow-sm'
+              : 'bg-[rgba(242,242,249,0.49)] dark:bg-white/5 hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors shadow-sm';
 
 
             return (
-              <tr key={tx.id} className={`${rowClass} transition-colors`}>
-                <td className="p-4 font-medium text-[14px]" style={{ color: 'var(--text-primary)' }}>
+              <tr
+                key={tx.id}
+                className={`${rowClass} transition-colors rounded-lg ${!isPending ? 'bg-[#f5f5f5]' : ''}`}
+              >
+                <td className="p-4 font-medium text-[14px] first:rounded-l-lg last:rounded-r-lg" style={{ color: 'var(--text-primary)' }}>
                   {new Date(tx.date).toLocaleDateString()}
                   {isPending && (
-                    <div className="text-[10px] text-yellow-700 font-bold flex items-center gap-1 mt-1">
+                    <div className="text-[10px] text-yellow-400 font-bold flex items-center gap-1 mt-1">
                       <Clock size={10} />
                       {tx._pendingAction === 'add' ? 'Pending Approval' :
                         tx._pendingAction === 'update' ? 'Update Pending' : 'Deletion Pending'}
                     </div>
                   )}
                 </td>
-                <td className="p-4">
+                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
                   <div className="font-medium flex items-center gap-2 text-[14px]" style={{ color: 'var(--text-primary)' }}>
                     {tx.name}
                   </div>
                   {tx.description && <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>{tx.description}</div>}
                 </td>
-                <td className="p-4 font-medium text-[14px]" style={{ color: 'var(--text-primary)' }}>
+                <td className="p-4 font-medium text-[14px] first:rounded-l-lg last:rounded-r-lg" style={{ color: 'var(--text-primary)' }}>
                   PKR {tx.amount.toLocaleString()}
                 </td>
-                <td className="p-4">
+                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
                   <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getBadgeColor(tx.type)}`}>
                     {tx.type}
                   </span>
                 </td>
-                <td className="p-4">
+                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
                   {tx.image ? (
                     <img
                       src={tx.image}
@@ -96,35 +108,64 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                     </span>
                   )}
                 </td>
-                <td className="p-4">
+                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
                   <div className="flex gap-2">
                     {(userRole === 'admin' || userRole === 'assistant') && (
                       <>
-                        {/* Edit Button */}
-                        {tx._pendingAction !== 'delete' && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onEdit(tx);
-                            }}
-                            title={isPending ? "Edit Request" : "Edit Transaction"}
-                            className="p-2 btn-primary rounded hover:scale-105 transition-all shadow-sm text-sm"
-                          >
-                            <Edit size={16} />
-                          </button>
-                        )}
+                        {/* Admin Approval Actions for Pending Items */}
+                        {userRole === 'admin' && isPending && onApprove && onReject ? (
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onApprove(tx);
+                              }}
+                              title="Approve Request"
+                              className="p-2 btn-success rounded hover:scale-105 transition-all shadow-sm text-sm"
+                            >
+                              <Check size={16} />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onReject(tx);
+                              }}
+                              title="Reject Request"
+                              className="p-2 btn-danger rounded hover:scale-105 transition-all shadow-sm text-sm"
+                            >
+                              <X size={16} />
+                            </button>
+                          </>
+                        ) : (
+                          /* Standard Edit/Delete Actions */
+                          <>
+                            {/* Edit Button */}
+                            {tx._pendingAction !== 'delete' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onEdit(tx);
+                                }}
+                                title={isPending ? "Edit Request" : "Edit Transaction"}
+                                className="p-2 btn-primary rounded hover:scale-105 transition-all shadow-sm text-sm"
+                              >
+                                <Edit size={16} />
+                              </button>
+                            )}
 
-                        {/* Delete Button */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDelete(tx);
-                          }}
-                          title={isPending ? "Cancel Request" : "Delete Transaction"}
-                          className="p-2 btn-danger rounded hover:scale-105 transition-all shadow-sm text-sm"
-                        >
-                          {isPending ? <Trash2 size={16} /> : <Trash2 size={16} />}
-                        </button>
+                            {/* Delete Button */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDelete(tx);
+                              }}
+                              title={isPending ? "Cancel Request" : "Delete Transaction"}
+                              className="p-2 btn-danger rounded hover:scale-105 transition-all shadow-sm text-sm"
+                            >
+                              {isPending ? <Trash2 size={16} /> : <Trash2 size={16} />}
+                            </button>
+                          </>
+                        )}
                       </>
                     )}
                   </div>
@@ -139,6 +180,17 @@ export const TransactionList: React.FC<TransactionListProps> = ({
           )}
         </tbody>
       </table>
+
+      {sorted.length > INITIAL_LIMIT && (
+        <div className="flex justify-center mt-6">
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="btn-web3 px-6 py-2 text-sm font-semibold shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+          >
+            {showAll ? 'Show Less' : `Show All (${sorted.length})`}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

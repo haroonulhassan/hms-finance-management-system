@@ -13,13 +13,18 @@ import {
   Wallet,
   X,
   CloudUpload,
+  RotateCcw,
+  User as UserIcon,
+  FlaskConical,
+  Check,
+  AlertCircle
 } from 'lucide-react';
 
 import { Header } from '../components/Header';
 import { StatsCard } from '../components/StatsCard';
 import { TransactionList } from '../components/TransactionList';
 import { Skeleton } from '../components/Skeleton';
-import { EventData, User, Transaction, UserRole } from '../types';
+import { EventData, User, Transaction, UserRole, PendingRequest } from '../types';
 import {
   getEventById,
   deleteEvent,
@@ -29,9 +34,18 @@ import {
   createRequest,
   getPendingRequestsByEvent,
   updateRequest,
-  deleteRequest
+  deleteRequest,
+  approveRequest,
+  uploadImage,
+  getPublicCredentials,
+  updateCredentials,
+  getDeletedEvents,
+  restoreEvent,
+  permanentlyDeleteEvent,
+  getPendingRequests,
+  getUnreadRequestCount,
+  markAllRequestsAsRead
 } from '../services/db';
-import { compressImage } from '../src/utils/imageCompressor.ts';
 
 interface EventDetailProps {
   user: User;
@@ -56,8 +70,25 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
 
-  // Compression State
-  const [isCompressing, setIsCompressing] = useState(false);
+  // Settings Modal State
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'general' | 'recycle'>('general');
+  const [deletedEvents, setDeletedEvents] = useState<EventData[]>([]);
+  const [recycleDeleteId, setRecycleDeleteId] = useState<string | null>(null);
+
+  // Request Modal State
+  const [isRequestsOpen, setIsRequestsOpen] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Credentials State
+  const [adminCreds, setAdminCreds] = useState({ username: '', password: '' });
+  const [userCreds, setUserCreds] = useState({ username: '', password: '' });
+  const [assistantCreds, setAssistantCreds] = useState({ username: '', password: '' });
+  const [credStatus, setCredStatus] = useState('');
+
+  // Upload State
+  const [isUploading, setIsUploading] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -68,6 +99,9 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
     description: '',
     image: ''
   });
+
+  // Search State
+  const [eventSearch, setEventSearch] = useState('');
 
   const loadEvent = async () => {
     if (!id) return;
@@ -96,7 +130,8 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
           id: req.id,
           _isPending: true,
           _requestId: req.id,
-          _pendingAction: 'add'
+          _pendingAction: 'add',
+          _fullRequest: req
         });
       } else if (req.type === 'update_transaction') {
         // For updates, find the existing transaction and flag it
@@ -106,6 +141,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
           existing._requestId = req.id;
           existing._pendingAction = 'update';
           existing._pendingData = req.data.transaction;
+          existing._fullRequest = req;
         }
       } else if (req.type === 'delete_transaction') {
         // For deletions, flag the existing transaction
@@ -114,6 +150,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
           existing._isPending = true;
           existing._requestId = req.id;
           existing._pendingAction = 'delete';
+          existing._fullRequest = req;
         }
       }
     });
@@ -129,9 +166,127 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
     const channel = new BroadcastChannel('hms_sync');
     channel.onmessage = () => {
       loadEvent();
+      if (user.role === 'admin') {
+        loadRequests();
+        loadUnread();
+      }
     };
     return () => channel.close();
   }, [id]);
+
+  useEffect(() => {
+    if (user.role === 'admin') {
+      loadRequests();
+      loadUnread();
+    }
+  }, [user.role]);
+
+  useEffect(() => {
+    if (isSettingsOpen) {
+      loadSettingsData();
+    }
+  }, [isSettingsOpen]);
+
+  useEffect(() => {
+    if (isRequestsOpen) {
+      loadRequests();
+    }
+  }, [isRequestsOpen]);
+
+  const loadSettingsData = async () => {
+    if (user.role !== 'admin') return;
+    const creds = await getPublicCredentials();
+    setAdminCreds({ username: creds.adminUsername, password: '' });
+    setUserCreds({ username: creds.userUsername, password: '' });
+    setAssistantCreds({ username: creds.assistantUsername, password: '' });
+
+    const del = await getDeletedEvents();
+    setDeletedEvents(del);
+  };
+
+  const loadRequests = async () => {
+    if (user.role === 'admin') {
+      const reqs = await getPendingRequests();
+      setPendingRequests(reqs);
+    }
+  };
+
+  const loadUnread = async () => {
+    if (user.role === 'admin') {
+      const count = await getUnreadRequestCount();
+      setUnreadCount(count);
+    }
+  };
+
+  const handleOpenRequests = async () => {
+    setIsRequestsOpen(true);
+    if (unreadCount > 0) {
+      await markAllRequestsAsRead();
+      setUnreadCount(0); // Optimistic update
+    }
+    loadRequests();
+  };
+
+  const handleUpdateCredentials = async (role: UserRole) => {
+    setCredStatus('Saving...');
+    try {
+      if (role === 'admin') {
+        if (!adminCreds.username) return;
+        await updateCredentials('admin', adminCreds.username, adminCreds.password || undefined);
+      } else if (role === 'assistant') {
+        if (!assistantCreds.username) return;
+        await updateCredentials('assistant', assistantCreds.username, assistantCreds.password || undefined);
+      } else {
+        if (!userCreds.username) return;
+        await updateCredentials('user', userCreds.username, userCreds.password || undefined);
+      }
+      setCredStatus('Saved successfully!');
+      setTimeout(() => setCredStatus(''), 2000);
+    } catch (e) {
+      setCredStatus('Error saving.');
+    }
+  };
+
+  const handleRestore = async (id: string) => {
+    await restoreEvent(id);
+    loadSettingsData();
+    // If we are in EventDetail, restoring another event doesn't affect current event unless it's the current one (which is impossible as it's deleted)
+    // But we might want to reload if something related changed.
+  };
+
+  const handlePermanentDelete = (id: string) => {
+    setRecycleDeleteId(id);
+  };
+
+  const executePermanentDelete = async () => {
+    if (recycleDeleteId) {
+      await permanentlyDeleteEvent(recycleDeleteId);
+      loadSettingsData();
+      setRecycleDeleteId(null);
+    }
+  };
+
+  const handleApproveRequestModal = async (req: PendingRequest) => {
+    try {
+      await approveRequest(req);
+      setPendingRequests(prev => prev.filter(r => r.id !== req.id));
+      loadEvent(); // Reload current event as the approved request might be for this event
+    } catch (error) {
+      console.error("Failed to approve request", error);
+    }
+  };
+
+  const handleRejectRequestModal = async (id: string) => {
+    try {
+      await deleteRequest(id);
+      setPendingRequests(prev => prev.filter(req => req.id !== id));
+      loadRequests();
+      loadUnread();
+      loadEvent(); // Reload current event
+    } catch (e) {
+      console.error("Failed to reject request", e);
+    }
+  };
 
   const handleDeleteEvent = async () => {
     if (!event) return;
@@ -154,15 +309,16 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setIsCompressing(true);
+      setIsUploading(true);
       try {
-        // Compress image to ensure it is under 58.3 KB
-        const compressedBase64 = await compressImage(file, 800, 0.6, 58.3);
-        setFormData(prev => ({ ...prev, image: compressedBase64 }));
+        // Upload image to Cloudinary and get URL
+        const imageUrl = await uploadImage(file);
+        setFormData(prev => ({ ...prev, image: imageUrl }));
       } catch (error) {
-        console.error("Image compression failed:", error);
+        console.error("Image upload failed:", error);
+        alert("Failed to upload image. Please try again.");
       } finally {
-        setIsCompressing(false);
+        setIsUploading(false);
       }
     }
   };
@@ -315,6 +471,26 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
       setTransactionToDelete(null);
     } catch (error) {
       console.error("Failed to delete transaction", error);
+    }
+  };
+
+  const handleApproveTransaction = async (tx: Transaction) => {
+    if (!tx._fullRequest) return;
+    try {
+      await approveRequest(tx._fullRequest);
+      loadEvent();
+    } catch (error) {
+      console.error("Failed to approve transaction", error);
+    }
+  };
+
+  const handleRejectTransaction = async (tx: Transaction) => {
+    if (!tx._requestId) return;
+    try {
+      await deleteRequest(tx._requestId);
+      loadEvent();
+    } catch (error) {
+      console.error("Failed to reject transaction", error);
     }
   };
 
@@ -481,7 +657,17 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   if (loading) {
     return (
       <div className="min-h-screen bg-mesh">
-        <Header user={user} onLogout={onLogout} onSwitchRole={onSwitchRole} testingMode={testingMode} theme={theme} onToggleTheme={onToggleTheme} />
+        <Header
+          user={user}
+          onLogout={onLogout}
+          onSwitchRole={onSwitchRole}
+          testingMode={testingMode}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenRequests={handleOpenRequests}
+          unreadCount={unreadCount}
+        />
         <main className="max-w-[1200px] mx-auto px-4 py-8">
           <div className="flex flex-col md:flex-row justify-between items-center mb-8 pb-4 border-b border-gray-200 gap-4">
             <Skeleton className="h-10 w-48" />
@@ -511,7 +697,17 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
   return (
     <div className="min-h-screen bg-mesh">
-      <Header user={user} onLogout={onLogout} onSwitchRole={onSwitchRole} testingMode={testingMode} theme={theme} onToggleTheme={onToggleTheme} />
+      <Header
+        user={user}
+        onLogout={onLogout}
+        onSwitchRole={onSwitchRole}
+        testingMode={testingMode}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenRequests={handleOpenRequests}
+        unreadCount={unreadCount}
+      />
 
       <main className="max-w-[1200px] mx-auto px-4 py-8">
         {/* Header */}
@@ -536,11 +732,23 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
         <div className="glass-strong rounded-3xl shadow-2xl p-6 border border-white/10">
           <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
             <h2 className="text-xl text-gradient-primary font-bold">Transactions</h2>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center flex-wrap justify-end">
+              {/* Search Input */}
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search transactions..."
+                  className="bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all w-full md:w-64"
+                  style={{ color: 'var(--text-primary)' }}
+                  value={eventSearch}
+                  onChange={(e) => setEventSearch(e.target.value)}
+                />
+              </div>
+
               {(user.role === 'admin' || user.role === 'assistant') && (
                 <button
                   onClick={() => setShowDeleteConfirm(true)}
-                  className="btn-danger px-4 py-2 rounded-lg flex items-center gap-2 font-medium shadow-sm"
+                  className="btn-danger px-4 py-2 rounded-lg flex items-center gap-2 font-medium shadow-sm text-sm"
                 >
                   <Trash2 size={16} /> <span className="hidden md:inline">{user.role === 'assistant' ? 'Request Delete' : 'Delete Event'}</span>
                 </button>
@@ -567,7 +775,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                     });
                     setShowTransactionForm(true);
                   }}
-                  className="btn-web3 flex items-center gap-2 px-4 py-2 font-bold shadow-md"
+                  className="btn-web3 flex items-center gap-2 px-4 py-2 font-bold shadow-md text-sm"
                 >
                   <Plus size={16} /> {user.role === 'assistant' ? 'Request Tx' : 'Add Transaction'}
                 </button>
@@ -575,11 +783,13 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
             </div>
           </div>
           <TransactionList
-            transactions={displayTransactions}
+            transactions={displayTransactions.filter(t => t.name.toLowerCase().includes(eventSearch.toLowerCase()))}
             userRole={user.role}
             onEdit={handleEditClick}
             onDelete={handleRequestDeleteTransaction}
             onViewImage={(src) => setShowImageModal(src)}
+            onApprove={handleApproveTransaction}
+            onReject={handleRejectTransaction}
           />
         </div>
       </main>
@@ -673,16 +883,16 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
               <div className="input-web3 border-2 border-dashed rounded-lg p-6 text-center hover:bg-white/10 transition-all relative cursor-pointer group">
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/png, image/jpeg, image/jpg, image/webp, image/heic, image/heif, image/*"
                   onChange={handleImageUpload}
-                  disabled={isCompressing}
+                  disabled={isUploading}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                 />
                 <div className="flex flex-col items-center pointer-events-none">
-                  {isCompressing ? (
+                  {isUploading ? (
                     <div className="flex flex-col items-center justify-center py-4">
                       <div className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                      <span className="text-white font-bold text-sm">Compressing...</span>
+                      <span className="text-white font-bold text-sm">Uploading...</span>
                     </div>
                   ) : formData.image ? (
                     <div className="relative z-20">
@@ -695,12 +905,12 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                         <CloudUpload size={28} className="text-white" />
                       </div>
                       <span className="font-bold text-lg" style={{ color: 'var(--text-primary)' }}>Choose File</span>
-                      <span className="text-xs mt-1 font-medium" style={{ color: 'var(--text-tertiary)' }}>Supports JPG, PNG</span>
+                      <span className="text-xs mt-1 font-medium" style={{ color: 'var(--text-tertiary)' }}>Supports JPG, PNG, WEBP, HEIC</span>
                     </>
                   )}
                 </div>
               </div>
-              {formData.image && !isCompressing && (
+              {formData.image && !isUploading && (
                 <button
                   onClick={() => setFormData({ ...formData, image: '' })}
                   className="mt-2 text-sm text-red-600 hover:underline flex items-center gap-1 font-medium"
@@ -719,7 +929,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
               </button>
               <button
                 onClick={handleSaveTransaction}
-                disabled={isCompressing}
+                disabled={isUploading}
                 className="btn-web3 px-6 py-2 disabled:opacity-50"
               >
                 {editingTransaction
@@ -774,7 +984,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
             </h3>
             <p className="text-slate-300 mb-6">
               {transactionToDelete._isPending
-                ? `Cancel your pending request for "${transactionToDelete.name}"?`
+                ? "Are you sure you want to cancel this pending request?"
                 : (user.role === 'assistant'
                   ? `Send request to delete "${transactionToDelete.name}"? Admin approval required.`
                   : `Are you sure you want to delete "${transactionToDelete.name}"? This action cannot be undone.`)}
@@ -788,9 +998,333 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
               </button>
               <button
                 onClick={confirmDeleteTransaction}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold shadow-md"
+                className="px-4 py-2 btn-danger rounded-lg font-bold shadow-md"
               >
-                {transactionToDelete._isPending ? 'Yes, Cancel Request' : (user.role === 'assistant' ? 'Send Request' : 'Yes, Delete It')}
+                {transactionToDelete._isPending ? 'Yes, Cancel' : (user.role === 'assistant' ? 'Send Request' : 'Yes, Delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Requests Modal (Approval Center) */}
+      {isRequestsOpen && user.role === 'admin' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
+          <div className="glass-strong rounded-2xl w-full max-w-[700px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-6 border-b border-white/10">
+              <h3 className="text-2xl font-bold text-gradient-primary">Pending Approvals</h3>
+              <button onClick={() => setIsRequestsOpen(false)} className="text-red-500">
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-0 overflow-y-auto flex-1">
+              {pendingRequests.length === 0 ? (
+                <div className="text-center py-12 text-slate-300">
+                  <p>No pending requests.</p>
+                  <p className="text-sm mt-2">Actions taken by the Assistant will appear here.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {pendingRequests.map((req) => (
+                    <div key={req.id} className="p-6 hover:bg-white/5 transition-colors border-b border-white/10 last:border-0">
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex-1">
+                          <div className="font-bold text-lg mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
+                          <div className="text-sm flex gap-2 items-center flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
+                            <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
+                            <span>Requested by <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>{req.requestedBy}</span></span>
+                            <span>•</span>
+                            <span>{new Date(req.timestamp).toLocaleString()}</span>
+                          </div>
+                          {req.type.includes('transaction') && req.data.transaction && (
+                            <div className="mt-3 p-3 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded text-sm">
+                              <div className="grid grid-cols-3 gap-4 items-center" style={{ backgroundColor: 'transparent' }}>
+                                <div>
+                                  <span className="font-semibold block mb-1" style={{ color: 'var(--text-secondary)' }}>Amount:</span>
+                                  <strong className="text-lg" style={{ color: 'var(--text-primary)' }}>PKR {req.data.transaction.amount.toLocaleString()}</strong>
+                                </div>
+                                <div>
+                                  <span className="font-semibold block mb-1" style={{ color: 'var(--text-secondary)' }}>Type:</span>
+                                  <span className={`uppercase font-bold px-2 py-1 rounded text-xs ${req.data.transaction.type === 'collection' ? 'bg-blue-100 text-blue-700 dark:bg-cyan-900/30 dark:text-cyan-300' :
+                                    req.data.transaction.type === 'expense' ? 'bg-blue-100 text-blue-700 dark:bg-red-900/30 dark:text-red-300' :
+                                      'bg-blue-100 text-blue-700 dark:bg-orange-900/30 dark:text-orange-300'
+                                    }`}>
+                                    {req.data.transaction.type}
+                                  </span>
+                                </div>
+                                <div className="flex gap-2 justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRejectRequestModal(req.id);
+                                    }}
+                                    className="p-2 btn-danger rounded-lg shadow-md hover:scale-105 transition-all"
+                                    title="Reject"
+                                  >
+                                    <X size={18} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleApproveRequestModal(req);
+                                    }}
+                                    className="p-2 btn-success rounded-lg shadow-md hover:scale-105 transition-all"
+                                    title="Approve"
+                                  >
+                                    <Check size={18} />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
+          <div className="glass-strong rounded-2xl w-full max-w-[600px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center p-6 border-b border-white/10">
+              <h3 className="text-2xl font-bold text-gradient-primary">Settings</h3>
+              <button onClick={() => setIsSettingsOpen(false)} className="text-red-500">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="flex border-b">
+              <button
+                onClick={() => setSettingsTab('general')}
+                className={`flex-1 py-3 font-semibold text-sm transition-colors ${settingsTab === 'general' ? 'text-gradient-primary border-b-2 border-purple-500' : 'text-slate-400 hover:bg-white/5'}`}
+              >
+                Account Management
+              </button>
+              <button
+                onClick={() => setSettingsTab('recycle')}
+                className={`flex-1 py-3 font-semibold text-sm transition-colors ${settingsTab === 'recycle' ? 'text-gradient-primary border-b-2 border-purple-500' : 'text-slate-400 hover:bg-white/5'}`}
+              >
+                Recycle Bin
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1">
+              {settingsTab === 'general' ? (
+                <div className="space-y-8">
+                  {/* Testing Mode Settings */}
+                  <div className="glass p-4 rounded-lg border border-white/10">
+                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                      <FlaskConical size={18} /> Testing Mode
+                    </h4>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold" style={{ color: 'var(--text-primary)' }}>Enable Role Switching</div>
+                        <div className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                          Allows you to switch between Admin, Assistant, and User views to verify permissions and UI.
+                        </div>
+                      </div>
+                      {/* Note: onToggleTestingMode is not passed to EventDetail currently, need to check props */}
+                      {/* EventDetailProps has testingMode but not onToggleTestingMode? Let's check. */}
+                      {/* It does NOT have onToggleTestingMode in props in my view_file output. */}
+                      {/* I will omit the toggle button here or add the prop. Adding prop is better. */}
+                      <div className="text-xs text-red-400">Switching only available in Dashboard</div>
+                    </div>
+                  </div>
+
+                  {/* Admin Settings */}
+                  <div className="glass p-4 rounded-lg border border-white/10">
+                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                      <UserIcon size={18} /> Update Admin Credentials
+                    </h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                        <input
+                          type="text"
+                          className="input-web3"
+                          value={adminCreds.username}
+                          onChange={(e) => setAdminCreds({ ...adminCreds, username: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
+                        <input
+                          type="password"
+                          className="input-web3"
+                          placeholder="Leave blank to keep current"
+                          value={adminCreds.password}
+                          onChange={(e) => setAdminCreds({ ...adminCreds, password: e.target.value })}
+                        />
+                      </div>
+                      <div className="flex justify-end mt-2">
+                        <button
+                          onClick={() => handleUpdateCredentials('admin')}
+                          className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
+                        >
+                          Update Admin
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Assistant Settings */}
+                  <div className="glass p-4 rounded-lg border border-white/10">
+                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                      <UserIcon size={18} /> Update Assistant Credentials
+                    </h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                        <input
+                          type="text"
+                          className="input-web3"
+                          value={assistantCreds.username}
+                          onChange={(e) => setAssistantCreds({ ...assistantCreds, username: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
+                        <input
+                          type="password"
+                          className="input-web3"
+                          placeholder="Leave blank to keep current"
+                          value={assistantCreds.password}
+                          onChange={(e) => setAssistantCreds({ ...assistantCreds, password: e.target.value })}
+                        />
+                      </div>
+                      <div className="flex justify-end mt-2">
+                        <button
+                          onClick={() => handleUpdateCredentials('assistant')}
+                          className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
+                        >
+                          Update Assistant
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* User Settings */}
+                  <div className="glass p-4 rounded-lg border border-white/10">
+                    <h4 className="font-bold text-gradient-primary mb-4 flex items-center gap-2">
+                      <UserIcon size={18} /> Update User Credentials
+                    </h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                        <input
+                          type="text"
+                          className="input-web3"
+                          value={userCreds.username}
+                          onChange={(e) => setUserCreds({ ...userCreds, username: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold uppercase mb-1 block" style={{ color: 'var(--text-secondary)' }}>New Password (Optional)</label>
+                        <input
+                          type="password"
+                          className="input-web3"
+                          placeholder="Leave blank to keep current"
+                          value={userCreds.password}
+                          onChange={(e) => setUserCreds({ ...userCreds, password: e.target.value })}
+                        />
+                      </div>
+                      <div className="flex justify-end mt-2">
+                        <button
+                          onClick={() => handleUpdateCredentials('user')}
+                          className="btn-primary px-4 py-2 rounded-lg text-sm font-bold"
+                        >
+                          Update User
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {credStatus && (
+                    <div className={`p-3 rounded text-center text-sm font-bold ${credStatus.includes('Error') ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                      {credStatus}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Recycle Bin Tab */
+                <div className="space-y-4">
+                  <div className="glass border border-yellow-500/30 p-4 rounded-lg flex items-start gap-3">
+                    <RotateCcw className="text-yellow-400 shrink-0 mt-1" size={20} />
+                    <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      <p className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>Deleted Events</p>
+                      <p>Events here are hidden from the dashboard but can be restored. Permanently deleting them removes all associated data forever.</p>
+                    </div>
+                  </div>
+
+                  {deletedEvents.length === 0 ? (
+                    <div className="text-center py-8 italic" style={{ color: 'var(--text-tertiary)' }}>Recycle bin is empty</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {deletedEvents.map(evt => (
+                        <div key={evt.id} className="flex items-center justify-between p-4 glass rounded-lg border border-white/10">
+                          <div>
+                            <div className="font-bold" style={{ color: 'var(--text-primary)' }}>{evt.name}</div>
+                            <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>{evt.transactions.length} transactions</div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleRestore(evt.id)}
+                              className="p-2 text-cyan-400 hover:bg-white/10 rounded transition-colors"
+                              title="Restore"
+                            >
+                              <RotateCcw size={18} />
+                            </button>
+                            <button
+                              onClick={() => handlePermanentDelete(evt.id)}
+                              className="p-2 text-red-400 hover:bg-white/10 rounded transition-colors"
+                              title="Permanently Delete"
+                            >
+                              <X size={18} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Confirmation Modal */}
+      {recycleDeleteId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1100]">
+          <div className="glass-strong rounded-2xl p-8 w-[90%] max-w-[400px] shadow-2xl text-center">
+            <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Trash2 className="text-red-600" size={32} />
+            </div>
+            <h3 className="text-xl font-bold text-gradient-primary mb-2">Permanently Delete?</h3>
+            <p className="text-slate-300 mb-6">
+              This action cannot be undone. All transactions associated with this event will be lost forever.
+            </p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setRecycleDeleteId(null)}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executePermanentDelete}
+                className="px-4 py-2 btn-danger rounded-lg font-bold shadow-md"
+              >
+                Delete Forever
               </button>
             </div>
           </div>
