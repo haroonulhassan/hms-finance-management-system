@@ -850,9 +850,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
               <div className="flex flex-col gap-4">
                 {pendingRequests.map((req) => (
                   <div key={req.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg border border-white/10 hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors gap-4 shadow-sm">
-                    <div className="flex-1">
+                    <div className="flex-1 w-full">
                       <div className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
-                      <div className="text-xs flex gap-2 items-center" style={{ color: 'var(--text-tertiary)' }}>
+                      <div className="text-xs flex flex-col items-start gap-2 sm:flex-row sm:items-center" style={{ color: 'var(--text-tertiary)' }}>
                         <span className="uppercase font-bold text-cyan-400">{req.type.replace('_', ' ')}</span>
                         <span>•</span>
                         <span>{req.requestedBy}</span>
@@ -944,10 +944,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                   value={dashboardFilterType}
                   onChange={(e) => setDashboardFilterType(e.target.value)}
                 >
-                  <option value="all" className="bg-white dark:bg-slate-800">All Types</option>
-                  <option value="collection" className="bg-white dark:bg-slate-800">Collection</option>
-                  <option value="expense" className="bg-white dark:bg-slate-800">Expense</option>
-                  <option value="loan" className="bg-white dark:bg-slate-800">Loan</option>
+                  <option value="all" className="bg-white dark:bg-slate-800 text-white">All Types</option>
+                  <option value="collection" className="bg-white dark:bg-slate-800 text-white">Collection</option>
+                  <option value="expense" className="bg-white dark:bg-slate-800 text-white">Expense</option>
+                  <option value="loan" className="bg-white dark:bg-slate-800 text-white">Loan</option>
                 </select>
               </div>
             </div>
@@ -1196,13 +1196,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
         isRequestsOpen && user.role === 'admin' && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
             <div className="bg-white dark:bg-[#1e293b] rounded-2xl w-full max-w-[700px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-white/10">
-              <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-white/10 bg-white dark:bg-transparent">
+              <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-white/10 bg-white my_pa dark:bg-transparent">
                 <h3 className="text-2xl font-bold text-gradient-primary">Pending Approvals</h3>
                 <button onClick={() => setIsRequestsOpen(false)} className="text-red-500">
                   <X size={24} />
                 </button>
               </div>
-              <div className="p-0 overflow-y-auto flex-1">
+              <div className="p-0 overflow-y-auto flex-1 dark:bg-transparent my_pa2">
                 {pendingRequests.length === 0 ? (
                   <div className="text-center py-12" style={{ color: 'var(--text-tertiary)' }}>
                     <p>No pending requests.</p>
@@ -1211,21 +1211,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                 ) : (
                   <div className="divide-y divide-gray-100">
                     {pendingRequests.map((req) => (
-                      <div key={req.id} className="card-web3 p-6 mb-3">
+                      <div key={req.id} className="card-web3 p-6 mb-3 my_card">
                         <div className="flex justify-between items-start mb-2">
                           <div className="flex-1">
                             <div className="font-bold text-lg mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
                             <div className="text-sm flex gap-2 items-center flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
-                              <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
+                              <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-100 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
                               <span>Requested by <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>{req.requestedBy}</span></span>
                               <span>•</span>
                               <span>{new Date(req.timestamp).toLocaleString()}</span>
                             </div>
                             {req.type.includes('transaction') && req.data.transaction && (
-                              <div
-                                className="mt-3 p-3 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded text-sm"
-                                style={{ backgroundColor: theme === 'light' ? 'rgba(242, 242, 249, 0.49)' : undefined }}
-                              >
+                              <div className="mt-3 p-3 rounded text-sm pending-transaction-card">
                                 <div className="grid grid-cols-3 gap-4 items-center" style={{ backgroundColor: 'transparent' }}>
                                   <div>
                                     <span className="font-semibold block mb-1" style={{ color: 'var(--text-secondary)' }}>Amount:</span>

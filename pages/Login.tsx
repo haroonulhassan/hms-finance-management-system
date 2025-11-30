@@ -234,7 +234,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </div>
         )}
 
-        <div className="mt-8 text-center text-xs text-slate-400 border-t border-white/10 pt-6">
+        <div className="text-center text-xs text-slate-400 border-t border-white/10 pt-6">
           <p>HMS Finance Management System © 2025</p>
         </div>
       </div>
@@ -262,13 +262,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     <p className="text-sm text-slate-300">
                       Click below to receive your backup code via email, or enter a code manually.
                     </p>
-                    <button
-                      onClick={handleRequestBackupCodes}
-                      className="btn-web3 w-full py-3 flex items-center justify-center gap-2"
-                    >
-                      <span>📧</span> Send Code to Email
-                    </button>
-
                     <input
                       type="text"
                       className="input-web3"
@@ -277,8 +270,16 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                       onChange={(e) => setBackupCode(e.target.value)}
                     />
                     <button
+                      onClick={handleRequestBackupCodes}
+                      className="btn-web3 w-full py-3 flex items-center justify-center gap-2"
+                    >
+                      <span>📧</span> Send Code to Email
+                    </button>
+
+
+                    <button
                       onClick={handleForgotVerify}
-                      className="btn-secondary w-full py-3 btn-verify"
+                      className="btn-web3 w-full py-3 btn-verify"
                     >
                       Verify Code
                     </button>

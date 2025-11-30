@@ -1,4 +1,4 @@
-/* Web3.0 Design System */
+﻿/* Web3.0 Design System */
 
 :root {
   /* Primary Gradients */
@@ -749,6 +749,33 @@ body:not(.light-mode) .card-web3 {
   transition: var(--transition-smooth);
 }
 
+body:not(.light-mode) .my_card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  margin-bottom: 0;
+}
+
+body.light-mode .my_card {
+  border: 0;
+  border-radius: 0;
+  margin-bottom: 0;
+}
+
+body:not(.light-mode) .my_card:hover,
+body.light-mode .my_card:hover {
+  transform: none;
+  margin-bottom: 0;
+}
+
+body.light-mode .my_pa {
+  background-color: #fff;
+}
+
+body.light-mode .my_pa2 {
+  background-color: #fff;
+}
+
 /* Custom Verify Button Style for Light Mode */
 body.light-mode .btn-verify {
   background: var(--gradient-primary);
@@ -765,4 +792,23 @@ body.light-mode .btn-verify:hover {
 .text-cyan-400 {
   --tw-text-opacity: 1;
   color: rgb(34 211 238 / var(--tw-text-opacity, 1));
+}
+
+/* Pending Transaction Card - Theming */
+.pending-transaction-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  transition: var(--transition-smooth);
+}
+
+/* Light Mode Override */
+body.light-mode .pending-transaction-card {
+  background: rgba(242, 242, 249, 0.49);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Dark Mode Specific (Explicit) */
+body:not(.light-mode) .pending-transaction-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
