@@ -6,7 +6,10 @@ const AuthSchema = new mongoose.Schema({
   password: { type: String, required: true },
   backupCodes: [{ type: String }], // Array of backup codes for admin
   token: { type: String }, // Authentication token
-  tokenExpiry: { type: Date } // Token expiration date
+  tokenExpiry: { type: Date }, // Token expiration date
+  emailRateLimit: {
+    lastSent: { type: Date } // Timestamp of last email sent
+  }
 });
 
 const TransactionSchema = new mongoose.Schema({

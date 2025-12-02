@@ -47,7 +47,10 @@ const PORT = 5000;
 // Use 127.0.0.1 explicitly to avoid localhost IPv6 resolution issues
 const MONGO_URI = process.env.MONGO_URI;
 
-app.use(cors());
+app.use(cors({
+  origin: ['https://hmsfinance.site', 'http://localhost:5173', 'http://localhost:3000'],
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -314,18 +317,30 @@ let lastEmailSentTime = 0;
 // Send Backup Code via Email (One code per request)
 app.post('/api/send-backup-codes', async (req, res) => {
   try {
-    const now = Date.now();
-    if (now - lastEmailSentTime < 60000) { // 60 seconds cooldown
-      const remaining = Math.ceil((60000 - (now - lastEmailSentTime)) / 1000);
-      console.warn(`⚠️ Email rate limit hit. Try again in ${remaining}s`);
-      return res.status(429).json({ error: `Please wait ${remaining} seconds before requesting another code.` });
-    }
+    const now = new Date();
 
     console.log('📧 Backup code email request received');
     await connectDB();
     const admin = await Auth.findOne({ role: 'admin' });
 
-    if (!admin || !admin.backupCodes || admin.backupCodes.length === 0) {
+    if (!admin) {
+      return res.status(404).json({ error: 'Admin not found' });
+    }
+
+    // Check 2-hour cooldown
+    if (admin.emailRateLimit && admin.emailRateLimit.lastSent) {
+      const lastSent = new Date(admin.emailRateLimit.lastSent);
+      const diffMs = now - lastSent;
+      const diffHours = diffMs / (1000 * 60 * 60);
+
+      if (diffHours < 2) {
+        const remainingMinutes = Math.ceil((2 * 60) - (diffMs / (1000 * 60)));
+        console.warn(`⚠️ Email rate limit hit. Last sent: ${lastSent.toISOString()}, Diff: ${diffHours.toFixed(2)}h`);
+        return res.status(429).json({ error: `Please wait ${remainingMinutes} minutes before requesting another code.` });
+      }
+    }
+
+    if (!admin.backupCodes || admin.backupCodes.length === 0) {
       console.log('❌ No backup codes available');
       return res.status(404).json({ error: 'No backup codes available' });
     }
@@ -371,7 +386,13 @@ app.post('/api/send-backup-codes', async (req, res) => {
     await transporter.sendMail(mailOptions);
     console.log('✅ Email sent successfully');
 
-    lastEmailSentTime = Date.now(); // Update last sent time
+    lastEmailSentTime = Date.now(); // Update last sent time (keep for in-memory throttle if needed)
+
+    // Update last sent timestamp
+    if (!admin.emailRateLimit) admin.emailRateLimit = {};
+    admin.emailRateLimit.lastSent = now;
+    await admin.save();
+
     res.json({ success: true });
   } catch (error) {
     console.error('❌ Email send error:', error);
