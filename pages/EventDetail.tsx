@@ -207,7 +207,20 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
   const loadRequests = async () => {
     if (user.role === 'admin') {
       const reqs = await getPendingRequests();
-      setPendingRequests(reqs);
+      // Sort by timestamp descending, and for same timestamps, by array position
+      const indexed = reqs.map((req, index) => ({ req, index }));
+      indexed.sort((a, b) => {
+        const timeA = new Date(a.req.timestamp).getTime();
+        const timeB = new Date(b.req.timestamp).getTime();
+
+        if (timeB !== timeA) {
+          return timeB - timeA; // Sort by timestamp descending
+        }
+        // If timestamps are equal, reverse the original order
+        return b.index - a.index;
+      });
+      const sorted = indexed.map(item => item.req);
+      setPendingRequests(sorted);
     }
   };
 
@@ -216,6 +229,32 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
       const count = await getUnreadRequestCount();
       setUnreadCount(count);
     }
+  };
+
+  // Helper function to generate change summary for update requests
+  const getChangeSummary = (req: PendingRequest): string => {
+    if (req.type !== 'update_transaction' || !req.data.originalTransaction || !req.data.transaction) {
+      return req.description;
+    }
+
+    const orig = req.data.originalTransaction;
+    const updated = req.data.transaction;
+    const changes: string[] = [];
+
+    if (orig.name !== updated.name) {
+      changes.push(`Name: "${orig.name}" → "${updated.name}"`);
+    }
+    if (orig.amount !== updated.amount) {
+      changes.push(`Amount: PKR ${orig.amount.toLocaleString()} → PKR ${updated.amount.toLocaleString()}`);
+    }
+    if (orig.type !== updated.type) {
+      changes.push(`Type: ${orig.type} → ${updated.type}`);
+    }
+    if (orig.image !== updated.image) {
+      changes.push(`Image: ${orig.image ? 'Updated' : 'Added'}`);
+    }
+
+    return changes.length > 0 ? changes.join(' | ') : req.description;
   };
 
   const handleOpenRequests = async () => {
@@ -332,6 +371,31 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
 
     const amount = parseFloat(formData.amount);
     if (isNaN(amount)) {
+      return;
+    }
+
+    // Check for duplicate transaction name in the same event
+    // Allow same name if type OR description is different
+    const duplicateExists = displayTransactions.some(tx => {
+      // When editing, exclude the current transaction from the check
+      if (editingTransaction && tx.id === editingTransaction.id) {
+        return false;
+      }
+      // Check if name matches (case-insensitive)
+      const nameMatches = tx.name.toLowerCase().trim() === formData.name.toLowerCase().trim();
+      if (!nameMatches) {
+        return false; // Different name, not a duplicate
+      }
+      // Same name - check if type AND description are also the same
+      const typeMatches = tx.type === formData.type;
+      const descriptionMatches = (tx.description || '').toLowerCase().trim() === (formData.description || '').toLowerCase().trim();
+
+      // It's a duplicate only if name, type, AND description all match
+      return typeMatches && descriptionMatches;
+    });
+
+    if (duplicateExists) {
+      alert(`A transaction with the name "${formData.name}", type "${formData.type}", and same description already exists in this event. Please change the type, description, or name.`);
       return;
     }
 
@@ -738,7 +802,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                 <input
                   type="text"
                   placeholder="Search transactions..."
-                  className="bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all w-full md:w-64"
+                  className="rt_input bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all w-full md:w-64"
                   style={{ color: 'var(--text-primary)' }}
                   value={eventSearch}
                   onChange={(e) => setEventSearch(e.target.value)}
@@ -839,6 +903,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                   type="date"
                   className="input-web3"
                   value={formData.date}
+                  max={new Date().toISOString().split('T')[0]}
                   onChange={(e) => setFormData({ ...formData, date: e.target.value })}
                 />
               </div>
@@ -1030,6 +1095,11 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                       <div className="flex justify-between items-start mb-2">
                         <div className="flex-1">
                           <div className="font-bold text-lg mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
+                          {req.type === 'update_transaction' && req.data.originalTransaction && (
+                            <div className="text-xs mt-2 p-2 bg-cyan-400/10 rounded border-l-2 border-cyan-400" style={{ color: 'var(--text-secondary)' }}>
+                              <span className="font-semibold text-cyan-400">Changes: </span>{getChangeSummary(req)}
+                            </div>
+                          )}
                           <div className="text-sm flex gap-2 items-center flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
                             <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
                             <span>Requested by <span className="font-semibold" style={{ color: 'var(--text-secondary)' }}>{req.requestedBy}</span></span>
@@ -1037,7 +1107,7 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                             <span>{new Date(req.timestamp).toLocaleString()}</span>
                           </div>
                           {req.type.includes('transaction') && req.data.transaction && (
-                            <div className="mt-3 p-3 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded text-sm">
+                            <div className="card-web3 mt-3 p-3 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded text-sm">
                               <div className="grid grid-cols-3 gap-4 items-center" style={{ backgroundColor: 'transparent' }}>
                                 <div>
                                   <span className="font-semibold block mb-1" style={{ color: 'var(--text-secondary)' }}>Amount:</span>
@@ -1077,6 +1147,34 @@ export const EventDetail: React.FC<EventDetailProps> = ({ user, onLogout, onSwit
                                   </button>
                                 </div>
                               </div>
+                            </div>
+                          )}
+
+                          {/* Actions for non-transaction requests (Event Delete) */}
+                          {!req.type.includes('transaction') && (
+                            <div className="mt-3 flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRejectRequestModal(req.id);
+                                }}
+                                className="p-2 btn-danger rounded-lg shadow-md hover:scale-105 transition-all"
+                                title="Reject"
+                              >
+                                <X size={18} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleApproveRequestModal(req);
+                                }}
+                                className="p-2 btn-success rounded-lg shadow-md hover:scale-105 transition-all"
+                                title="Approve"
+                              >
+                                <Check size={18} />
+                              </button>
                             </div>
                           )}
                         </div>

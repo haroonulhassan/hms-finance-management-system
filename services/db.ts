@@ -123,32 +123,90 @@ export const getPublicCredentials = async () => {
 
 // --- Image Upload Service ---
 
-export const uploadImage = async (file: File): Promise<string> => {
+// Helper: Compress image if larger than limit
+const compressImage = async (file: File, limitMB: number): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
 
-    reader.onload = async () => {
-      try {
-        const base64 = reader.result as string;
-        console.log('📤 Uploading image to Cloudinary, size:', Math.round(base64.length / 1024), 'KB');
-        const response = await api(`/upload-image`, {
-          method: 'POST',
-          body: JSON.stringify({ image: base64 })
-        });
-        console.log('✅ Upload successful, URL:', response.url);
-        resolve(response.url);
-      } catch (error: any) {
-        console.error('❌ Upload failed:', error);
-        reject(error);
-      }
-    };
+        // Max dimension to prevent massive canvas memory usage
+        const MAX_DIMENSION = 2000;
+        if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+          if (width > height) {
+            height = Math.round(height * (MAX_DIMENSION / width));
+            width = MAX_DIMENSION;
+          } else {
+            width = Math.round(width * (MAX_DIMENSION / height));
+            height = MAX_DIMENSION;
+          }
+        }
 
-    reader.onerror = (error) => {
-      console.error('❌ File read error:', error);
-      reject(error);
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(event.target?.result as string); // Fallback
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Start with high quality
+        let quality = 0.9;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+
+        // Reduce quality until size is under limit
+        // Base64 length * 0.75 is approx file size in bytes
+        while (dataUrl.length * 0.75 > limitMB * 1024 * 1024 && quality > 0.1) {
+          quality -= 0.1;
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+        }
+
+        console.log(`📉 Image compressed. New size: ${Math.round((dataUrl.length * 0.75) / 1024)} KB, Quality: ${quality.toFixed(1)}`);
+        resolve(dataUrl);
+      };
+      img.onerror = (err) => reject(err);
     };
+    reader.onerror = (err) => reject(err);
   });
+};
+
+export const uploadImage = async (file: File): Promise<string> => {
+  try {
+    let base64Image: string;
+
+    // Check if file is > 5MB
+    if (file.size > 5 * 1024 * 1024) {
+      console.log(`⚠️ Image size ${Math.round(file.size / 1024 / 1024)}MB exceeds 5MB limit. Compressing...`);
+      base64Image = await compressImage(file, 5);
+    } else {
+      // Standard read for small files
+      base64Image = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = (error) => reject(error);
+      });
+    }
+
+    console.log('📤 Uploading image to Cloudinary, size:', Math.round(base64Image.length / 1024), 'KB');
+    const response = await api(`/upload-image`, {
+      method: 'POST',
+      body: JSON.stringify({ image: base64Image })
+    });
+    console.log('✅ Upload successful, URL:', response.url);
+    return response.url;
+
+  } catch (error: any) {
+    console.error('❌ Upload failed:', error);
+    throw error;
+  }
 };
 
 // --- Request / Approval Services ---

@@ -234,8 +234,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </div>
         )}
 
-        <div className="text-center text-xs text-slate-400 border-t border-white/10 pt-6">
-          <p>HMS Finance Management System © 2025</p>
+        <div className="text-center border-t border-white/10 pt-6 space-y-3">
+          <p className="text-sm text-slate-300 font-medium italic">
+            This project is dedicated to HMS Society by Raiha Iman Student of BS & Mphil at UOG (Batch, 2021–2027).
+          </p>
+          <p className="text-xs text-slate-400">
+            HMS Finance Management System © 2025
+          </p>
         </div>
       </div>
 

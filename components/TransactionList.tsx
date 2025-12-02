@@ -25,12 +25,18 @@ export const TransactionList: React.FC<TransactionListProps> = ({
   const [showAll, setShowAll] = React.useState(false);
   const INITIAL_LIMIT = 10;
 
-  // Sort by date descending, but ensure we don't break if date is missing (though it shouldn't be)
-  const sorted = [...transactions].sort((a, b) => {
-    // Prioritize pending adds at the top if needed, or just by date
-    // Let's stick to date
-    return new Date(b.date).getTime() - new Date(a.date).getTime();
-  });
+  // Sort by date descending, and for same dates, preserve reverse order (last added = first shown)
+  const indexed = transactions.map((tx, index) => ({ tx, index }));
+  const sorted = indexed.sort((a, b) => {
+    const dateA = new Date(a.tx.date).getTime();
+    const dateB = new Date(b.tx.date).getTime();
+
+    if (dateB !== dateA) {
+      return dateB - dateA; // Sort by date descending
+    }
+    // If dates are equal, reverse the original order (higher index = added later = show first)
+    return b.index - a.index;
+  }).map(item => item.tx);
 
   const visibleTransactions = showAll ? sorted : sorted.slice(0, INITIAL_LIMIT);
 
@@ -62,7 +68,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
             const isPending = tx._isPending;
             const rowClass = isPending
               ? 'bg-slate-700/30 hover:bg-slate-700/50 border-l-4 border-l-yellow-400 shadow-sm'
-              : 'bg-[rgba(242,242,249,0.49)] dark:bg-white/5 hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors shadow-sm';
+              : 'card-web3 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors shadow-sm';
 
 
             return (
@@ -71,41 +77,147 @@ export const TransactionList: React.FC<TransactionListProps> = ({
                 className={`${rowClass} transition-colors rounded-lg ${!isPending ? 'bg-[#f5f5f5]' : ''}`}
               >
                 <td className="p-4 font-medium text-[14px] first:rounded-l-lg last:rounded-r-lg" style={{ color: 'var(--text-primary)' }}>
-                  {new Date(tx.date).toLocaleDateString()}
-                  {isPending && (
-                    <div className="text-[10px] text-yellow-400 font-bold flex items-center gap-1 mt-1">
-                      <Clock size={10} />
-                      {tx._pendingAction === 'add' ? 'Pending Approval' :
-                        tx._pendingAction === 'update' ? 'Update Pending' : 'Deletion Pending'}
+                  <div className="flex items-center gap-2">
+                    {tx._pendingAction === 'update' && (
+                      <div className="bg-cyan-400/20 p-1 rounded" title="Update Request">
+                        <RefreshCw size={14} className="text-cyan-400" />
+                      </div>
+                    )}
+                    <div>
+                      {new Date(tx.date).toLocaleDateString()}
+                      {isPending && (
+                        <div className="text-[10px] text-yellow-400 font-bold flex items-center gap-1 mt-1">
+                          <Clock size={10} />
+                          {tx._pendingAction === 'add' ? 'Pending Approval' :
+                            tx._pendingAction === 'update' ? 'Update Pending' : 'Deletion Pending'}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </td>
                 <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
                   <div className="font-medium flex items-center gap-2 text-[14px]" style={{ color: 'var(--text-primary)' }}>
-                    {tx.name}
+                    {tx._pendingAction === 'update' && tx._fullRequest?.data?.originalTransaction && tx._pendingData ? (
+                      // Show change: Old → New
+                      tx._fullRequest.data.originalTransaction.name !== tx._pendingData.name ? (
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <span className="line-through text-red-400 opacity-70">{tx._fullRequest.data.originalTransaction.name}</span>
+                            <span className="text-cyan-400">→</span>
+                            <span className="text-green-400 font-bold">{tx._pendingData.name}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        tx.name
+                      )
+                    ) : (
+                      tx.name
+                    )}
                   </div>
                   {tx.description && <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>{tx.description}</div>}
                 </td>
                 <td className="p-4 font-medium text-[14px] first:rounded-l-lg last:rounded-r-lg" style={{ color: 'var(--text-primary)' }}>
-                  PKR {tx.amount.toLocaleString()}
-                </td>
-                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
-                  <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getBadgeColor(tx.type)}`}>
-                    {tx.type}
-                  </span>
-                </td>
-                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
-                  {tx.image ? (
-                    <img
-                      src={tx.image}
-                      alt="Receipt"
-                      className="w-8 h-8 object-cover rounded border border-gray-200 cursor-pointer hover:scale-110 hover:shadow-md transition-all"
-                      onClick={() => onViewImage(tx.image!)}
-                    />
+                  {tx._pendingAction === 'update' && tx._fullRequest?.data?.originalTransaction && tx._pendingData ? (
+                    // Show change: Old → New
+                    tx._fullRequest.data.originalTransaction.amount !== tx._pendingData.amount ? (
+                      <div className="flex items-center gap-2">
+                        <span className="line-through text-red-400 opacity-70">PKR {tx._fullRequest.data.originalTransaction.amount.toLocaleString()}</span>
+                        <span className="text-cyan-400">→</span>
+                        <span className="text-green-400 font-bold">PKR {tx._pendingData.amount.toLocaleString()}</span>
+                      </div>
+                    ) : (
+                      `PKR ${tx.amount.toLocaleString()}`
+                    )
                   ) : (
-                    <span className="text-gray-300 flex items-center gap-1">
-                      <ImageIcon size={14} />
+                    `PKR ${tx.amount.toLocaleString()}`
+                  )}
+                </td>
+                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
+                  {tx._pendingAction === 'update' && tx._fullRequest?.data?.originalTransaction && tx._pendingData ? (
+                    // Show change: Old → New
+                    tx._fullRequest.data.originalTransaction.type !== tx._pendingData.type ? (
+                      <div className="flex flex-col gap-1">
+                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider line-through opacity-70 ${getBadgeColor(tx._fullRequest.data.originalTransaction.type)}`}>
+                          {tx._fullRequest.data.originalTransaction.type}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-cyan-400 text-xs">→</span>
+                          <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getBadgeColor(tx._pendingData.type)}`}>
+                            {tx._pendingData.type}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getBadgeColor(tx.type)}`}>
+                        {tx.type}
+                      </span>
+                    )
+                  ) : (
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getBadgeColor(tx.type)}`}>
+                      {tx.type}
                     </span>
+                  )}
+                </td>
+                <td className="p-4 first:rounded-l-lg last:rounded-r-lg">
+                  {tx._pendingAction === 'update' && tx._fullRequest?.data?.originalTransaction && tx._pendingData ? (
+                    // Show both old and new images if changed
+                    tx._fullRequest.data.originalTransaction.image !== tx._pendingData.image ? (
+                      <div className="flex gap-2 items-center">
+                        {tx._fullRequest.data.originalTransaction.image ? (
+                          <div className="relative">
+                            <img
+                              src={tx._fullRequest.data.originalTransaction.image}
+                              alt="Old Receipt"
+                              className="w-8 h-8 object-cover rounded border border-red-400 cursor-pointer hover:scale-110 transition-all opacity-70"
+                              onClick={() => onViewImage(tx._fullRequest.data.originalTransaction.image!)}
+                            />
+                            <div className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] rounded-full w-3 h-3 flex items-center justify-center">✕</div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-xs">None</span>
+                        )}
+                        <span className="text-cyan-400">→</span>
+                        {tx._pendingData.image ? (
+                          <div className="relative">
+                            <img
+                              src={tx._pendingData.image}
+                              alt="New Receipt"
+                              className="w-8 h-8 object-cover rounded border border-green-400 cursor-pointer hover:scale-110 transition-all"
+                              onClick={() => onViewImage(tx._pendingData.image!)}
+                            />
+                            <div className="absolute -top-1 -right-1 bg-green-500 text-white text-[8px] rounded-full w-3 h-3 flex items-center justify-center">✓</div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-xs">None</span>
+                        )}
+                      </div>
+                    ) : (
+                      tx.image ? (
+                        <img
+                          src={tx.image}
+                          alt="Receipt"
+                          className="w-8 h-8 object-cover rounded border border-gray-200 cursor-pointer hover:scale-110 hover:shadow-md transition-all"
+                          onClick={() => onViewImage(tx.image!)}
+                        />
+                      ) : (
+                        <span className="text-gray-300 flex items-center gap-1">
+                          <ImageIcon size={14} />
+                        </span>
+                      )
+                    )
+                  ) : (
+                    tx.image ? (
+                      <img
+                        src={tx.image}
+                        alt="Receipt"
+                        className="w-8 h-8 object-cover rounded border border-gray-200 cursor-pointer hover:scale-110 hover:shadow-md transition-all"
+                        onClick={() => onViewImage(tx.image!)}
+                      />
+                    ) : (
+                      <span className="text-gray-300 flex items-center gap-1">
+                        <ImageIcon size={14} />
+                      </span>
+                    )
                   )}
                 </td>
                 <td className="p-4 first:rounded-l-lg last:rounded-r-lg">

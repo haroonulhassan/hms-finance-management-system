@@ -121,12 +121,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
   const loadRequests = async () => {
     if (user.role === 'admin') {
       const reqs = await getPendingRequests();
-      setPendingRequests(reqs);
+      // Sort by timestamp descending, and for same timestamps, by array position
+      const indexed = reqs.map((req, index) => ({ req, index }));
+      indexed.sort((a, b) => {
+        const timeA = new Date(a.req.timestamp).getTime();
+        const timeB = new Date(b.req.timestamp).getTime();
+
+        if (timeB !== timeA) {
+          return timeB - timeA; // Sort by timestamp descending
+        }
+        // If timestamps are equal, reverse the original order
+        return b.index - a.index;
+      });
+      const sorted = indexed.map(item => item.req);
+      setPendingRequests(sorted);
     } else if (user.role === 'assistant') {
       // Load only assistant's own requests
       const allReqs = await getPendingRequests();
       const myReqs = allReqs.filter(req => req.requestedBy === user.username);
-      setPendingRequests(myReqs);
+      // Sort assistant's requests too
+      const indexed = myReqs.map((req, index) => ({ req, index }));
+      indexed.sort((a, b) => {
+        const timeA = new Date(a.req.timestamp).getTime();
+        const timeB = new Date(b.req.timestamp).getTime();
+
+        if (timeB !== timeA) {
+          return timeB - timeA;
+        }
+        return b.index - a.index;
+      });
+      const sorted = indexed.map(item => item.req);
+      setPendingRequests(sorted);
     }
   };
 
@@ -135,6 +160,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
       const count = await getUnreadRequestCount();
       setUnreadCount(count);
     }
+  };
+
+  // Helper function to generate change summary for update requests
+  const getChangeSummary = (req: PendingRequest): string => {
+    if (req.type !== 'update_transaction' || !req.data.originalTransaction || !req.data.transaction) {
+      return req.description;
+    }
+
+    const orig = req.data.originalTransaction;
+    const updated = req.data.transaction;
+    const changes: string[] = [];
+
+    if (orig.name !== updated.name) {
+      changes.push(`Name: "${orig.name}" → "${updated.name}"`);
+    }
+    if (orig.amount !== updated.amount) {
+      changes.push(`Amount: PKR ${orig.amount.toLocaleString()} → PKR ${updated.amount.toLocaleString()}`);
+    }
+    if (orig.type !== updated.type) {
+      changes.push(`Type: ${orig.type} → ${updated.type}`);
+    }
+    if (orig.image !== updated.image) {
+      changes.push(`Image: ${orig.image ? 'Updated' : 'Added'}`);
+    }
+
+    return changes.length > 0 ? changes.join(' | ') : req.description;
   };
 
   useEffect(() => {
@@ -290,8 +341,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
     });
   });
 
-  // Sort by date descending to get most recent first
-  recentTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // Sort by date descending, and for same dates, preserve reverse order (last added = first shown)
+  const indexedRecentTransactions = recentTransactions.map((tx, index) => ({ tx, index }));
+  indexedRecentTransactions.sort((a, b) => {
+    const dateA = new Date(a.tx.date).getTime();
+    const dateB = new Date(b.tx.date).getTime();
+
+    if (dateB !== dateA) {
+      return dateB - dateA; // Sort by date descending
+    }
+    // If dates are equal, reverse the original order (higher index = added later = show first)
+    return b.index - a.index;
+  });
+
+  const sortedRecentTransactions = indexedRecentTransactions.map(item => item.tx);
+  // Replace the original array with sorted one
+  recentTransactions.length = 0;
+  recentTransactions.push(...sortedRecentTransactions);
 
   // Filter Recent Transactions
   const filteredRecentTransactions = recentTransactions.filter(t => {
@@ -849,9 +915,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
             <div className="p-6">
               <div className="flex flex-col gap-4">
                 {pendingRequests.map((req) => (
-                  <div key={req.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg border border-white/10 hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors gap-4 shadow-sm">
+                  <div key={req.id} className="card-web3 flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg border border-white/10 hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors gap-4 shadow-sm">
                     <div className="flex-1 w-full">
                       <div className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
+                      {req.type === 'update_transaction' && req.data.originalTransaction && (
+                        <div className="text-xs mt-2 p-2 bg-cyan-400/10 rounded border-l-2 border-cyan-400" style={{ color: 'var(--text-secondary)' }}>
+                          <span className="font-semibold text-cyan-400">Changes: </span>{getChangeSummary(req)}
+                        </div>
+                      )}
                       <div className="text-xs flex flex-col items-start gap-2 sm:flex-row sm:items-center" style={{ color: 'var(--text-tertiary)' }}>
                         <span className="uppercase font-bold text-cyan-400">{req.type.replace('_', ' ')}</span>
                         <span>•</span>
@@ -898,6 +969,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                   <div key={req.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 mb-2 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg shadow-sm hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors gap-4">
                     <div className="flex-1">
                       <div className="font-bold mb-1" style={{ color: 'var(--text-primary)' }}>{req.description}</div>
+                      {req.type === 'update_transaction' && req.data.originalTransaction && (
+                        <div className="text-xs mt-2 p-2 bg-cyan-400/10 rounded border-l-2 border-cyan-400" style={{ color: 'var(--text-secondary)' }}>
+                          <span className="font-semibold text-cyan-400">Changes: </span>{getChangeSummary(req)}
+                        </div>
+                      )}
                       <div className="text-xs flex gap-2 items-center" style={{ color: 'var(--text-tertiary)' }}>
                         <span className="text-cyan-400 dark:text-blue-300 px-2 py-0.5 rounded text-xs uppercase font-bold">{req.type.replace('_', ' ')}</span>
                         <span>•</span>
@@ -931,7 +1007,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                 <input
                   type="text"
                   placeholder="Search transactions by title..."
-                  className="w-full bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all"
+                  className="w-full bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all rt_input"
                   style={{ color: 'var(--text-primary)' }}
                   value={dashboardSearch}
                   onChange={(e) => setDashboardSearch(e.target.value)}
@@ -939,15 +1015,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
               </div>
               <div className="sm:w-48">
                 <select
-                  className="w-full bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all appearance-none cursor-pointer"
+                  className="w-full bg-[rgba(242,242,249,0.49)] dark:bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400/50 transition-all appearance-none cursor-pointer rt_input"
                   style={{ color: 'var(--text-primary)' }}
                   value={dashboardFilterType}
                   onChange={(e) => setDashboardFilterType(e.target.value)}
                 >
-                  <option value="all" className="bg-white dark:bg-slate-800 text-white">All Types</option>
-                  <option value="collection" className="bg-white dark:bg-slate-800 text-white">Collection</option>
-                  <option value="expense" className="bg-white dark:bg-slate-800 text-white">Expense</option>
-                  <option value="loan" className="bg-white dark:bg-slate-800 text-white">Loan</option>
+                  <option value="all" className="bg-white dark:bg-slate-800 text-black">All Types</option>
+                  <option value="collection" className="bg-white dark:bg-slate-800 text-black">Collection</option>
+                  <option value="expense" className="bg-white dark:bg-slate-800 text-black">Expense</option>
+                  <option value="loan" className="bg-white dark:bg-slate-800 text-black">Loan</option>
                 </select>
               </div>
             </div>
@@ -965,7 +1041,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                 ) : (
                   <div className="flex flex-col gap-2">
                     {filteredRecentTransactions.slice(0, 5).map((t) => (
-                      <div key={t.id} className="flex justify-between items-center p-4 mb-2 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg shadow-sm hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors group">
+                      <div key={t.id} className="card-web3 flex justify-between items-center p-4 mb-2 bg-[rgba(242,242,249,0.49)] dark:bg-white/5 rounded-lg shadow-sm hover:bg-[rgba(242,242,249,0.49)] dark:hover:bg-white/10 transition-colors group">
                         <div>
                           <div className="font-semibold" style={{ color: 'var(--text-primary)' }}>{t.name}</div>
                           <div className="text-sm" style={{ color: 'var(--text-tertiary)' }}>{t.eventName} • {new Date(t.date).toLocaleDateString()}</div>
@@ -1195,14 +1271,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
       {
         isRequestsOpen && user.role === 'admin' && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
-            <div className="bg-white dark:bg-[#1e293b] rounded-2xl w-full max-w-[700px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col border border-gray-200 dark:border-white/10">
-              <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-white/10 bg-white my_pa dark:bg-transparent">
+            <div className="glass-strong rounded-2xl w-full max-w-[700px] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col border border-white/10">
+              <div className="flex justify-between items-center p-6 border-b border-white/10">
                 <h3 className="text-2xl font-bold text-gradient-primary">Pending Approvals</h3>
                 <button onClick={() => setIsRequestsOpen(false)} className="text-red-500">
                   <X size={24} />
                 </button>
               </div>
-              <div className="p-0 overflow-y-auto flex-1 dark:bg-transparent my_pa2">
+              <div className="p-0 overflow-y-auto flex-1">
                 {pendingRequests.length === 0 ? (
                   <div className="text-center py-12" style={{ color: 'var(--text-tertiary)' }}>
                     <p>No pending requests.</p>
@@ -1223,6 +1299,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                             </div>
                             {req.type.includes('transaction') && req.data.transaction && (
                               <div className="mt-3 p-3 rounded text-sm pending-transaction-card">
+                                {/* Show changes for update transactions */}
+                                {req.type === 'update_transaction' && req.data.originalTransaction && (
+                                  <div className="mb-3 p-2 bg-cyan-400/10 rounded border-l-2 border-cyan-400">
+                                    <span className="font-semibold text-cyan-400 block mb-1">Changes:</span>
+                                    <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                                      {getChangeSummary(req)}
+                                    </span>
+                                  </div>
+                                )}
+
                                 <div className="grid grid-cols-3 gap-4 items-center" style={{ backgroundColor: 'transparent' }}>
                                   <div>
                                     <span className="font-semibold block mb-1" style={{ color: 'var(--text-secondary)' }}>Amount:</span>
@@ -1262,6 +1348,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onSwitchRo
                                     </button>
                                   </div>
                                 </div>
+                              </div>
+                            )}
+
+                            {/* Actions for non-transaction requests (Event Create/Delete) */}
+                            {!req.type.includes('transaction') && (
+                              <div className="mt-3 flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRejectRequest(req.id);
+                                  }}
+                                  className="p-2 btn-danger rounded-lg shadow-md hover:scale-105 transition-all"
+                                  title="Reject"
+                                >
+                                  <X size={18} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleApproveRequest(req);
+                                  }}
+                                  className="p-2 btn-success rounded-lg shadow-md hover:scale-105 transition-all"
+                                  title="Approve"
+                                >
+                                  <Check size={18} />
+                                </button>
                               </div>
                             )}
                           </div>

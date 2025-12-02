@@ -16,8 +16,8 @@ const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // Use STARTTLS
+  port: 465,
+  secure: true, // Use SSL
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
@@ -27,11 +27,12 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Verify transporter configuration on startup
+// Verify transporter configuration on startup (non-blocking)
 transporter.verify(function (error, success) {
   if (error) {
     console.error('❌ Email transporter verification failed:', error.message);
-    console.log('⚠️ Please check your EMAIL_USER and EMAIL_PASS in .env file');
+    console.log('⚠️ Email features will be disabled');
+    console.log('📝 To enable email, update EMAIL_USER and EMAIL_PASS in .env file');
     console.log('📝 EMAIL_PASS must be a Gmail App Password (16 characters)');
     console.log('🔗 Generate at: https://myaccount.google.com/apppasswords');
   } else {
@@ -59,15 +60,20 @@ const connectDB = async () => {
     console.log(`⏳ Attempting to connect to MongoDB...`);
 
     await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 5000
+      serverSelectionTimeoutMS: 30000, // Increased from 5000ms to 30000ms
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 30000
     });
 
     isDbConnected = true;
     console.log('✅ Connected to MongoDB successfully');
-    if (typeof seedAuth === 'function') await seedAuth();
+
+    // Only seed after connection is confirmed
+    await seedAuth();
   } catch (err) {
     isDbConnected = false;
     console.error('❌ MongoDB connection error:', err.message);
+    console.log('⚠️ Please check your MONGO_URI in .env file');
   }
 };
 
@@ -265,45 +271,8 @@ app.post('/api/auth/reset-admin', async (req, res) => {
       console.log('🔐 Generated new backup code:', newCode);
       console.log('📋 Current backup codes count:', admin.backupCodes.length);
 
-      // Send new backup codes via email
-      try {
-        const mailOptions = {
-          from: process.env.EMAIL_USER,
-          to: process.env.ADMIN_EMAIL,
-          subject: 'HMS Finance - New Backup Code Generated',
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
-              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-                <h1 style="color: white; margin: 0; font-size: 28px;">HMS Finance</h1>
-                <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0;">Password Reset Successful</p>
-              </div>
-              <div style="background: white; padding: 30px; border-radius: 0 0 10px 10px;">
-                <h2 style="color: #333; margin-top: 0;">Your New Backup Code</h2>
-                <p style="color: #666; line-height: 1.6;">Your admin password has been successfully reset. Here is your new backup code for future password recovery:</p>
-                <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                  <div style="background: white; padding: 12px; margin: 8px 0; border-left: 4px solid #667eea; font-family: monospace; font-size: 16px; font-weight: bold; color: #333;">
-                    ${newCode}
-                  </div>
-                </div>
-                <p style="color: #999; font-size: 14px; margin-top: 20px;">
-                  <strong>Note:</strong> This code can only be used once. Keep this code secure and save it in a safe place.
-                </p>
-                <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-top: 20px; border-radius: 4px;">
-                  <p style="color: #856404; margin: 0; font-size: 14px;">
-                    <strong>⚠️ Important:</strong> Store this code securely. You'll need it if you forget your password again.
-                  </p>
-                </div>
-              </div>
-            </div>
-          `
-        };
-
-        await transporter.sendMail(mailOptions);
-        console.log('✅ New backup code sent to:', process.env.ADMIN_EMAIL);
-      } catch (emailError) {
-        console.error('❌ Failed to send new backup code email:', emailError);
-        // Don't fail the password reset if email fails
-      }
+      // Email sending disabled per user request
+      // The new backup code is generated but not emailed
 
       await admin.save();
       res.json({ success: true, newCodeGenerated: true });
@@ -339,9 +308,19 @@ app.post('/api/upload-image', async (req, res) => {
   }
 });
 
+// Rate Limiting for Emails
+let lastEmailSentTime = 0;
+
 // Send Backup Code via Email (One code per request)
 app.post('/api/send-backup-codes', async (req, res) => {
   try {
+    const now = Date.now();
+    if (now - lastEmailSentTime < 60000) { // 60 seconds cooldown
+      const remaining = Math.ceil((60000 - (now - lastEmailSentTime)) / 1000);
+      console.warn(`⚠️ Email rate limit hit. Try again in ${remaining}s`);
+      return res.status(429).json({ error: `Please wait ${remaining} seconds before requesting another code.` });
+    }
+
     console.log('📧 Backup code email request received');
     await connectDB();
     const admin = await Auth.findOne({ role: 'admin' });
@@ -391,6 +370,8 @@ app.post('/api/send-backup-codes', async (req, res) => {
     console.log('🔑 Code being sent:', backupCode);
     await transporter.sendMail(mailOptions);
     console.log('✅ Email sent successfully');
+
+    lastEmailSentTime = Date.now(); // Update last sent time
     res.json({ success: true });
   } catch (error) {
     console.error('❌ Email send error:', error);
@@ -463,13 +444,28 @@ app.delete('/api/events/:id', async (req, res) => {
       for (const tx of event.transactions) {
         if (tx.image && tx.image.includes('cloudinary.com')) {
           try {
-            // Robust extraction using Regex
+            let publicId = null;
+
+            // Strategy 1: Standard Regex for Cloudinary URLs
             // Matches everything after /upload/ (and optional version v123...) up to the last dot
             const regex = /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/;
             const match = tx.image.match(regex);
 
             if (match && match[1]) {
-              const publicId = match[1];
+              publicId = match[1];
+            }
+
+            // Strategy 2: Fallback for 'hms' folder if regex failed or gave unexpected result
+            if (!publicId && tx.image.includes('/hms/')) {
+              const parts = tx.image.split('/hms/');
+              if (parts.length > 1) {
+                const afterHms = parts[1]; // filename.jpg
+                const filename = afterHms.split('.')[0]; // filename
+                publicId = 'hms/' + filename;
+              }
+            }
+
+            if (publicId) {
               console.log(`🔍 Extracted Public ID: "${publicId}" from URL: "${tx.image}"`);
 
               imageDeletionPromises.push(
@@ -539,13 +535,25 @@ app.delete('/api/events/:id/transactions/:txId', async (req, res) => {
 
     if (transactionToDelete && transactionToDelete.image && transactionToDelete.image.includes('cloudinary.com')) {
       try {
+        let publicId = null;
         const regex = /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/;
         const match = transactionToDelete.image.match(regex);
 
         if (match && match[1]) {
-          const publicId = match[1];
-          console.log(`🔍 Extracted Public ID: "${publicId}" from URL: "${transactionToDelete.image}"`);
+          publicId = match[1];
+        }
 
+        if (!publicId && transactionToDelete.image.includes('/hms/')) {
+          const parts = transactionToDelete.image.split('/hms/');
+          if (parts.length > 1) {
+            const afterHms = parts[1];
+            const filename = afterHms.split('.')[0];
+            publicId = 'hms/' + filename;
+          }
+        }
+
+        if (publicId) {
+          console.log(`🔍 Extracted Public ID: "${publicId}" from URL: "${transactionToDelete.image}"`);
           const result = await cloudinary.uploader.destroy(publicId);
           console.log(`Cloudinary destroy result for ${publicId}:`, result);
         } else {
@@ -576,7 +584,21 @@ app.get('/api/requests', async (req, res) => {
 
 app.post('/api/requests', async (req, res) => {
   try {
-    const request = await Request.create(req.body);
+    let requestData = req.body;
+
+    // For update_transaction requests, fetch the original transaction for comparison
+    if (requestData.type === 'update_transaction' && requestData.data && requestData.data.eventId && requestData.data.transaction) {
+      const event = await Event.findOne({ id: requestData.data.eventId });
+      if (event) {
+        const originalTransaction = event.transactions.find(t => t.id === requestData.data.transaction.id);
+        if (originalTransaction) {
+          // Store both original and updated transaction data
+          requestData.data.originalTransaction = originalTransaction.toObject();
+        }
+      }
+    }
+
+    const request = await Request.create(requestData);
     res.json(request);
   } catch (e) {
     res.status(500).json({ error: e.message });
